@@ -1,3 +1,5 @@
+import axios, { type AxiosRequestConfig } from "axios";
+
 import type {
   Feed,
   FeedRefreshResult,
@@ -23,13 +25,19 @@ export class ApiError extends Error {
   }
 }
 
+const http = axios.create({
+  baseURL: apiBase,
+  headers: { Accept: "application/json" },
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function describeError(response: Response): Promise<string> {
-  try {
-    const body: unknown = await response.json();
+function describeError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const body: unknown = error.response?.data;
+
     if (isRecord(body)) {
       const detail = body.detail;
       if (typeof detail === "string") {
@@ -46,45 +54,37 @@ async function describeError(response: Response): Promise<string> {
         }
       }
     }
-  } catch {
-    // The body was empty or not JSON; fall back to the status code.
+
+    if (error.response) {
+      return `The API answered with ${error.response.status}.`;
+    }
+
+    return `Could not reach the Tributary API at ${apiBase}. Start it with "uv run tributary serve".`;
   }
 
-  return `The API answered with ${response.status}.`;
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Something went wrong.";
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  let response: Response;
+async function request<T>(config: AxiosRequestConfig): Promise<T> {
   try {
-    response = await fetch(`${apiBase}${path}`, {
-      ...init,
-      headers,
-      cache: "no-store",
-    });
+    const response = await http.request<T>(config);
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return response.data;
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (axios.isCancel(error)) {
       throw error;
     }
-    throw new ApiError(
-      `Could not reach the Tributary API at ${apiBase}. Start it with "uv run tributary serve".`,
-      0,
-    );
+    if (axios.isAxiosError(error)) {
+      throw new ApiError(describeError(error), error.response?.status ?? 0);
+    }
+    throw error;
   }
-
-  if (!response.ok) {
-    throw new ApiError(await describeError(response), response.status);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
 }
 
 export interface ItemQuery {
@@ -100,84 +100,92 @@ export interface ItemQuery {
 
 export const api = {
   listFeeds(signal?: AbortSignal): Promise<Feed[]> {
-    return request<Feed[]>("/api/feeds", { signal });
+    return request<Feed[]>({ url: "/api/feeds", signal });
   },
 
   createFeed(url: string): Promise<Feed> {
-    return request<Feed>("/api/feeds", {
+    return request<Feed>({
+      url: "/api/feeds",
       method: "POST",
-      body: JSON.stringify({ url }),
+      data: { url },
     });
   },
 
   refreshFeed(feedId: number): Promise<FeedRefreshResult> {
-    return request<FeedRefreshResult>(`/api/feeds/${feedId}/refresh`, {
+    return request<FeedRefreshResult>({
+      url: `/api/feeds/${feedId}/refresh`,
       method: "POST",
     });
   },
 
   refreshFeeds(): Promise<FeedRefreshResult[]> {
-    return request<FeedRefreshResult[]>("/api/feeds/refresh", {
+    return request<FeedRefreshResult[]>({
+      url: "/api/feeds/refresh",
       method: "POST",
     });
   },
 
   listItems(query: ItemQuery = {}): Promise<ItemPage> {
-    const params = new URLSearchParams();
+    const params: Record<string, string | number | boolean> = {};
     if (query.unread !== undefined) {
-      params.set("unread", String(query.unread));
+      params.unread = query.unread;
     }
     if (query.starred !== undefined) {
-      params.set("starred", String(query.starred));
+      params.starred = query.starred;
     }
     if (query.feedId !== undefined && query.feedId !== null) {
-      params.set("feed_id", String(query.feedId));
+      params.feed_id = query.feedId;
     }
     if (query.label) {
-      params.set("label", query.label);
+      params.label = query.label;
     }
     if (query.q) {
-      params.set("q", query.q);
+      params.q = query.q;
     }
     if (query.limit !== undefined) {
-      params.set("limit", String(query.limit));
+      params.limit = query.limit;
     }
     if (query.offset !== undefined) {
-      params.set("offset", String(query.offset));
+      params.offset = query.offset;
     }
 
-    const suffix = params.toString();
-    return request<ItemPage>(`/api/items${suffix ? `?${suffix}` : ""}`, {
+    return request<ItemPage>({
+      url: "/api/items",
+      params,
       signal: query.signal,
     });
   },
 
   updateItem(itemId: number, update: ItemUpdate): Promise<Item> {
-    return request<Item>(`/api/items/${itemId}`, {
+    return request<Item>({
+      url: `/api/items/${itemId}`,
       method: "PATCH",
-      body: JSON.stringify(update),
+      data: update,
     });
   },
 
   listLabels(signal?: AbortSignal): Promise<Label[]> {
-    return request<Label[]>("/api/labels", { signal });
+    return request<Label[]>({ url: "/api/labels", signal });
   },
 
   createLabel(name: string): Promise<Label> {
-    return request<Label>("/api/labels", {
+    return request<Label>({
+      url: "/api/labels",
       method: "POST",
-      body: JSON.stringify({ name }),
+      data: { name },
     });
   },
 
   addItemLabel(itemId: number, labelId: number): Promise<Item> {
-    return request<Item>(`/api/items/${itemId}/labels/${labelId}`, {
+    return request<Item>({
+      url: `/api/items/${itemId}/labels/${labelId}`,
       method: "POST",
     });
   },
 
   removeItemLabel(itemId: number, labelId: number): Promise<void> {
-    return request<void>(`/api/items/${itemId}/labels/${labelId}`, {
+    return request<void>({
+      url: `/api/items/${itemId}/labels/${labelId}`,
       method: "DELETE",
     });
   },

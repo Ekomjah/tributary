@@ -1,51 +1,75 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
-
-import { api, ApiError } from "@/lib/api";
 import {
-  excerpt,
-  formatFullDate,
-  formatRelative,
-  hostOf,
-  htmlToText,
-  readingMinutes,
-} from "@/lib/text";
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  CircleCheck,
+  Keyboard,
+  Loader2,
+  Menu,
+  Plus,
+  RefreshCw,
+  Search,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+
+import AddFeedDialog from "@/components/add-feed-dialog";
+import AddLabelDialog from "@/components/add-label-dialog";
+import ArticleList from "@/components/article-list";
+import ArticleView from "@/components/article-view";
+import Sidebar from "@/components/sidebar";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { api, apiBase, ApiError } from "@/lib/api";
+import { hostOf } from "@/lib/text";
 import type {
   Decision,
-  Feed,
   Item,
+  ItemPage,
   ItemUpdate,
   ItemView,
   Label,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-import {
-  CheckIcon,
-  ExternalIcon,
-  RefreshIcon,
-  SearchIcon,
-  SparkIcon,
-  StarIcon,
-  StreamIcon,
-  TributaryMark,
-} from "./icons";
-
-const VIEWS: ItemView[] = ["unread", "all", "starred"];
+const VIEWS: ItemView[] = ["all", "unread", "starred"];
 const VIEW_NAMES: Record<ItemView, string> = {
-  unread: "Unread",
   all: "All items",
-  starred: "Starred",
-};
-const VIEW_KEYS: Record<ItemView, string> = {
-  unread: "1",
-  all: "2",
-  starred: "3",
+  unread: "Unread",
+  starred: "Starred items",
 };
 const PAGE_SIZE = 100;
 
-interface Toast {
+const SHORTCUTS: [string, string][] = [
+  ["j / k", "Next / previous story"],
+  ["o / Enter", "Open story"],
+  ["v", "Open original"],
+  ["s", "Star"],
+  ["m", "Mark read / unread"],
+  ["r", "Refresh feeds"],
+  ["/", "Search"],
+  ["Esc", "Back to the list"],
+];
+
+interface StatusMessage {
   message: string;
   error?: boolean;
 }
@@ -54,73 +78,130 @@ function withScheme(value: string): string {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
 
+function messageOf(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Something went wrong.";
+}
+
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
 export default function Reader() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [total, setTotal] = useState(0);
-  const [feeds, setFeeds] = useState<Feed[]>([]);
-  const [labels, setLabels] = useState<Label[]>([]);
-  const [view, setView] = useState<ItemView>("unread");
+  const queryClient = useQueryClient();
+
+  const [view, setView] = useState<ItemView>("all");
   const [feedId, setFeedId] = useState<number | null>(null);
   const [label, setLabel] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [loadedScope, setLoadedScope] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [feedUrl, setFeedUrl] = useState("");
-  const [addingFeed, setAddingFeed] = useState(false);
-  const [newLabel, setNewLabel] = useState("");
-  const [addingLabel, setAddingLabel] = useState(false);
-  const [toast, setToast] = useState<Toast | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const [sourcesToken, setSourcesToken] = useState(0);
+  const [openItemId, setOpenItemId] = useState<number | null>(null);
+
+  const [status, setStatus] = useState<StatusMessage | null>(null);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addFeedOpen, setAddFeedOpen] = useState(false);
+  const [addLabelOpen, setAddLabelOpen] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const readingRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
 
-  const showToast = useCallback((message: string, error = false) => {
-    setToast({ message, error });
+  const showStatus = useCallback((message: string, error = false) => {
+    setStatus({ message, error });
   }, []);
 
   const showError = useCallback(
     (error: unknown) => {
-      let message = "Something went wrong.";
-      if (error instanceof ApiError) {
-        message = error.message;
-      } else if (error instanceof Error) {
-        message = error.message;
-      }
-      showToast(message, true);
+      showStatus(messageOf(error), true);
     },
-    [showToast],
+    [showStatus],
   );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([
-      api.listFeeds(controller.signal),
-      api.listLabels(controller.signal),
-    ])
-      .then(([nextFeeds, nextLabels]) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setFeeds(nextFeeds);
-        setLabels(nextLabels);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          showError(error);
-        }
+  const feedsQuery = useQuery({
+    queryKey: ["feeds"],
+    queryFn: ({ signal }) => api.listFeeds(signal),
+  });
+
+  const labelsQuery = useQuery({
+    queryKey: ["labels"],
+    queryFn: ({ signal }) => api.listLabels(signal),
+  });
+
+  const feeds = useMemo(() => feedsQuery.data ?? [], [feedsQuery.data]);
+  const labels = useMemo(() => labelsQuery.data ?? [], [labelsQuery.data]);
+  const feedKey = useMemo(
+    () => feeds.map((feed) => feed.id).join(","),
+    [feeds],
+  );
+
+  const countsQuery = useQuery({
+    queryKey: ["counts", feedKey],
+    enabled: feedsQuery.isSuccess,
+    queryFn: async ({ signal }) => {
+      const [allPage, unreadPage, starredPage, ...feedPages] = await Promise.all(
+        [
+          api.listItems({ limit: 1, signal }),
+          api.listItems({ unread: true, limit: 1, signal }),
+          api.listItems({ starred: true, limit: 1, signal }),
+          ...feeds.map((feed) =>
+            api.listItems({
+              unread: true,
+              feedId: feed.id,
+              limit: 1,
+              signal,
+            }),
+          ),
+        ],
+      );
+
+      const feedCounts: Record<number, number> = {};
+      feeds.forEach((feed, index) => {
+        feedCounts[feed.id] = feedPages[index]?.total ?? 0;
       });
 
-    return () => controller.abort();
-  }, [showError, sourcesToken]);
+      const views: Record<ItemView, number> = {
+        all: allPage.total,
+        unread: unreadPage.total,
+        starred: starredPage.total,
+      };
+
+      return { views, feeds: feedCounts };
+    },
+  });
+
+  const itemsQuery = useQuery({
+    queryKey: ["items", view, feedId, label, query],
+    queryFn: ({ signal }) =>
+      api.listItems({
+        unread: view === "unread" ? true : undefined,
+        starred: view === "starred" ? true : undefined,
+        feedId,
+        label,
+        q: query || undefined,
+        limit: PAGE_SIZE,
+        signal,
+      }),
+    placeholderData: keepPreviousData,
+  });
+
+  const items = useMemo(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
+  const total = itemsQuery.data?.total ?? 0;
+  const loading = itemsQuery.isFetching;
+  const counts = countsQuery.data?.views ?? { all: 0, unread: 0, starred: 0 };
+  const feedCounts = countsQuery.data?.feeds ?? {};
+  const queryError =
+    feedsQuery.error ?? labelsQuery.error ?? countsQuery.error ?? itemsQuery.error;
+  const queryErrorMessage = queryError ? messageOf(queryError) : null;
+  const banner =
+    status ??
+    (queryErrorMessage ? { message: queryErrorMessage, error: true } : null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -129,67 +210,21 @@ export default function Reader() {
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  const scopeKey = `${view}|${feedId ?? ""}|${label ?? ""}|${query}|${reloadToken}`;
-  const loading = loadedScope !== scopeKey;
-
   useEffect(() => {
-    const controller = new AbortController();
-
-    api
-      .listItems({
-        unread: view === "unread" ? true : undefined,
-        starred: view === "starred" ? true : undefined,
-        feedId,
-        label,
-        q: query || undefined,
-        limit: PAGE_SIZE,
-        signal: controller.signal,
-      })
-      .then((page) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setItems(page.items);
-        setTotal(page.total);
-        setSelectedId((current) =>
-          current !== null && page.items.some((item) => item.id === current)
-            ? current
-            : (page.items[0]?.id ?? null),
-        );
-        setLoadedScope(scopeKey);
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        showError(error);
-        setItems([]);
-        setTotal(0);
-        setSelectedId(null);
-        setLoadedScope(scopeKey);
-      });
-
-    return () => controller.abort();
-  }, [feedId, label, query, reloadToken, scopeKey, showError, view]);
-
-  useEffect(() => {
-    if (!toast) {
+    if (!status) {
       return;
     }
     const timer = window.setTimeout(
-      () => setToast(null),
-      toast.error ? 6500 : 3800,
+      () => setStatus(null),
+      status.error ? 6500 : 3800,
     );
     return () => window.clearTimeout(timer);
-  }, [toast]);
+  }, [status]);
 
-  useEffect(() => {
-    readingRef.current?.scrollTo({ top: 0 });
-  }, [selectedId]);
-
-  const selected = useMemo(
-    () => items.find((item) => item.id === selectedId) ?? null,
-    [items, selectedId],
+  const activeFeed = useMemo(
+    () =>
+      feedId === null ? null : (feeds.find((feed) => feed.id === feedId) ?? null),
+    [feedId, feeds],
   );
 
   const feedNames = useMemo(() => {
@@ -200,203 +235,318 @@ export default function Reader() {
     return names;
   }, [feeds]);
 
-  const activeFeed = useMemo(
-    () => (feedId === null ? null : (feeds.find((feed) => feed.id === feedId) ?? null)),
-    [feedId, feeds],
+  const selectedItemId = useMemo(
+    () =>
+      items.some((item) => item.id === selectedId)
+        ? selectedId
+        : (items[0]?.id ?? null),
+    [items, selectedId],
   );
 
-  const readingBody = useMemo(
-    () => htmlToText(selected?.content ?? ""),
-    [selected?.content],
+  const openArticle = useMemo(
+    () => items.find((item) => item.id === openItemId) ?? null,
+    [items, openItemId],
   );
-  const readingTime = useMemo(() => readingMinutes(readingBody), [readingBody]);
+
+  const activeItem = useMemo(
+    () =>
+      openArticle ??
+      items.find((item) => item.id === selectedItemId) ??
+      null,
+    [items, openArticle, selectedItemId],
+  );
+
+  const heading = query
+    ? "Search results"
+    : label
+      ? label
+      : activeFeed
+        ? activeFeed.title || hostOf(activeFeed.url)
+        : VIEW_NAMES[view];
+
+  const contextLabel = query
+    ? "search results"
+    : label
+      ? label
+      : activeFeed
+        ? activeFeed.title || hostOf(activeFeed.url)
+        : VIEW_NAMES[view];
+
+  const hasFilters = Boolean(query || label || feedId !== null);
+
+  const { mutate: mutateItem } = useMutation({
+    mutationFn: ({
+      itemId,
+      patch,
+    }: {
+      itemId: number;
+      patch: ItemUpdate;
+    }) => api.updateItem(itemId, patch),
+    onSuccess: (updated) => {
+      queryClient.setQueriesData<ItemPage>(
+        { queryKey: ["items"] },
+        (page) =>
+          page
+            ? {
+                ...page,
+                items: page.items.map((row) =>
+                  row.id === updated.id ? updated : row,
+                ),
+              }
+            : page,
+      );
+      void queryClient.invalidateQueries({ queryKey: ["counts"] });
+    },
+    onError: showError,
+  });
+
+  const { mutateAsync: toggleItemLabel } = useMutation({
+    mutationFn: async ({
+      item,
+      label: target,
+    }: {
+      item: Item;
+      label: Label;
+    }) => {
+      const attached = item.labels.some((entry) => entry.id === target.id);
+      if (attached) {
+        await api.removeItemLabel(item.id, target.id);
+        return { itemId: item.id, labelId: target.id, updated: null };
+      }
+
+      const updated = await api.addItemLabel(item.id, target.id);
+      return { itemId: item.id, labelId: target.id, updated };
+    },
+    onSuccess: ({ itemId, labelId, updated }) => {
+      queryClient.setQueriesData<ItemPage>(
+        { queryKey: ["items"] },
+        (page) => {
+          if (!page) {
+            return page;
+          }
+          return {
+            ...page,
+            items: page.items.map((row) => {
+              if (row.id !== itemId) {
+                return row;
+              }
+              if (updated) {
+                return updated;
+              }
+              return {
+                ...row,
+                labels: row.labels.filter((entry) => entry.id !== labelId),
+              };
+            }),
+          };
+        },
+      );
+    },
+    onError: showError,
+  });
+
+  const { mutate: runRefresh, isPending: refreshing } = useMutation({
+    mutationFn: () => api.refreshFeeds(),
+    onSuccess: (results) => {
+      if (results.length === 0) {
+        showStatus("Add a feed first, then refresh.");
+        return;
+      }
+
+      const newItems = results.reduce(
+        (sum, result) => sum + result.new_items,
+        0,
+      );
+      const failures = results.filter((result) => result.error);
+      if (failures.length > 0) {
+        showStatus(
+          `${plural(newItems, "new item")} · ${plural(
+            failures.length,
+            "feed",
+          )} failed.`,
+          true,
+        );
+      } else {
+        showStatus(
+          `${plural(newItems, "new item")} from ${plural(
+            results.length,
+            "feed",
+          )}.`,
+        );
+      }
+
+      void queryClient.invalidateQueries();
+    },
+    onError: showError,
+  });
+
+  const { mutateAsync: createAndFetchFeed } = useMutation({
+    mutationFn: async (url: string) => {
+      const feed = await api.createFeed(url);
+      const result = await api.refreshFeed(feed.id);
+      return { feed, result };
+    },
+  });
+
+  const { mutateAsync: createLabel } = useMutation({
+    mutationFn: (name: string) => api.createLabel(name),
+  });
 
   const patchItem = useCallback(
-    async (item: Item, patch: ItemUpdate) => {
-      try {
-        const updated = await api.updateItem(item.id, patch);
-        setItems((current) =>
-          current.map((row) => (row.id === updated.id ? updated : row)),
-        );
-
-        if (view === "unread" && typeof patch.is_read === "boolean") {
-          setTotal((current) =>
-            Math.max(0, current + (patch.is_read ? -1 : 1)),
-          );
-        }
-        if (
-          view === "starred" &&
-          typeof patch.starred === "boolean" &&
-          !patch.starred
-        ) {
-          setTotal((current) => Math.max(0, current - 1));
-        }
-      } catch (error) {
-        showError(error);
-      }
+    (item: Item, patch: ItemUpdate) => {
+      mutateItem({ itemId: item.id, patch });
     },
-    [showError, view],
+    [mutateItem],
   );
 
-  const toggleRead = useCallback(
+  const openItem = useCallback(
     (item: Item) => {
-      void patchItem(item, { is_read: !item.is_read });
+      setSelectedId(item.id);
+      setOpenItemId(item.id);
+      if (!item.is_read) {
+        patchItem(item, { is_read: true });
+      }
     },
     [patchItem],
   );
 
   const toggleStar = useCallback(
     (item: Item) => {
-      void patchItem(item, { starred: !item.starred });
+      patchItem(item, { starred: !item.starred });
+    },
+    [patchItem],
+  );
+
+  const toggleRead = useCallback(
+    (item: Item) => {
+      patchItem(item, { is_read: !item.is_read });
     },
     [patchItem],
   );
 
   const toggleDecision = useCallback(
     (item: Item, decision: Decision) => {
-      void patchItem(item, {
+      patchItem(item, {
         decision: item.decision === decision ? null : decision,
       });
     },
     [patchItem],
   );
 
-  const openItem = useCallback(
-    (item: Item) => {
-      setSelectedId(item.id);
-      if (!item.is_read) {
-        void patchItem(item, { is_read: true });
-      }
-    },
-    [patchItem],
-  );
-
   const toggleLabel = useCallback(
-    async (item: Item, target: Label) => {
-      const attached = item.labels.some((entry) => entry.id === target.id);
-      try {
-        if (attached) {
-          await api.removeItemLabel(item.id, target.id);
-          setItems((current) =>
-            current.map((row) =>
-              row.id === item.id
-                ? {
-                    ...row,
-                    labels: row.labels.filter((entry) => entry.id !== target.id),
-                  }
-                : row,
-            ),
-          );
-        } else {
-          const updated = await api.addItemLabel(item.id, target.id);
-          setItems((current) =>
-            current.map((row) => (row.id === updated.id ? updated : row)),
-          );
-        }
-      } catch (error) {
-        showError(error);
-      }
+    (item: Item, target: Label) => {
+      toggleItemLabel({ item, label: target }).catch(() => {
+        // The mutation's onError already surfaced the message.
+      });
     },
-    [showError],
+    [toggleItemLabel],
   );
 
-  const refreshAll = useCallback(async () => {
-    if (refreshing) {
-      return;
-    }
-    setRefreshing(true);
-    try {
-      const results = await api.refreshFeeds();
-      if (results.length === 0) {
-        showToast("Add a feed first, then refresh.");
-        return;
-      }
+  const clearSearch = useCallback(() => {
+    setSearch("");
+    setQuery("");
+    setOpenItemId(null);
+    searchRef.current?.focus();
+  }, []);
 
-      const newItems = results.reduce((sum, result) => sum + result.new_items, 0);
-      const failures = results.filter((result) => result.error);
-      if (failures.length > 0) {
-        showToast(
-          `${plural(newItems, "new item")} · ${plural(failures.length, "feed")} failed.`,
-          true,
-        );
-      } else {
-        showToast(
-          `${plural(newItems, "new item")} from ${plural(results.length, "feed")}.`,
-        );
-      }
-      setSourcesToken((current) => current + 1);
-      setReloadToken((current) => current + 1);
-    } catch (error) {
-      showError(error);
-    } finally {
-      setRefreshing(false);
+  const selectView = useCallback((next: ItemView) => {
+    setView(next);
+    setFeedId(null);
+    setLabel(null);
+    setSearch("");
+    setQuery("");
+    setOpenItemId(null);
+  }, []);
+
+  const selectFeed = useCallback((next: number | null) => {
+    setFeedId(next);
+    setLabel(null);
+    setView("all");
+    setSearch("");
+    setQuery("");
+    setOpenItemId(null);
+  }, []);
+
+  const selectLabel = useCallback((name: string) => {
+    setLabel((current) => (current === name ? null : name));
+    setFeedId(null);
+    setView("all");
+    setSearch("");
+    setQuery("");
+    setOpenItemId(null);
+  }, []);
+
+  const goHome = useCallback(() => {
+    setView("all");
+    setFeedId(null);
+    setLabel(null);
+    setSearch("");
+    setQuery("");
+    setSelectedId(null);
+    setOpenItemId(null);
+  }, []);
+
+  const refreshAll = useCallback(() => {
+    if (!refreshing) {
+      runRefresh();
     }
-  }, [refreshing, showError, showToast]);
+  }, [refreshing, runRefresh]);
 
   const submitFeed = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const raw = feedUrl.trim();
-      if (!raw || addingFeed) {
-        return;
-      }
-
-      setAddingFeed(true);
+    async (raw: string) => {
+      const url = withScheme(raw.trim());
       try {
-        const feed = await api.createFeed(withScheme(raw));
-        setFeedUrl("");
-        setFeeds((current) =>
-          [...current, feed].sort((left, right) =>
-            (left.title || left.url).localeCompare(right.title || right.url),
-          ),
-        );
-        const result = await api.refreshFeed(feed.id);
+        const { feed, result } = await createAndFetchFeed(url);
+
         if (result.error) {
-          showToast(
+          showStatus(
             `Added the feed, but the first fetch failed: ${result.error}`,
             true,
           );
         } else {
-          showToast(
-            `${result.title || hostOf(feed.url)}: ${plural(result.new_items, "new item")}.`,
+          showStatus(
+            `${result.title || feed.title || hostOf(feed.url)}: ${plural(
+              result.new_items,
+              "new item",
+            )}.`,
           );
         }
-        setSourcesToken((current) => current + 1);
-        setReloadToken((current) => current + 1);
+
+        setView("all");
+        setFeedId(feed.id);
+        setLabel(null);
+        setSearch("");
+        setQuery("");
+        setOpenItemId(null);
+        void queryClient.invalidateQueries();
+        return null;
       } catch (error) {
-        showError(error);
-      } finally {
-        setAddingFeed(false);
+        const message = messageOf(error);
+        showStatus(message, true);
+        return message;
       }
     },
-    [addingFeed, feedUrl, showError, showToast],
+    [createAndFetchFeed, queryClient, showStatus],
   );
 
   const submitLabel = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const name = newLabel.trim();
-      if (!name || addingLabel) {
-        return;
-      }
-
-      setAddingLabel(true);
+    async (name: string) => {
       try {
-        const created = await api.createLabel(name);
-        setLabels((current) =>
-          [...current, created].sort((left, right) =>
+        const created = await createLabel(name);
+        queryClient.setQueryData<Label[]>(["labels"], (current) =>
+          [...(current ?? []), created].sort((left, right) =>
             left.name.localeCompare(right.name),
           ),
         );
-        setNewLabel("");
-        showToast(`Label “${created.name}” added.`);
+        showStatus(`Label “${created.name}” added.`);
+        return null;
       } catch (error) {
-        showError(error);
-      } finally {
-        setAddingLabel(false);
+        const message = messageOf(error);
+        showStatus(message, true);
+        return message;
       }
     },
-    [addingLabel, newLabel, showError, showToast],
+    [createLabel, queryClient, showStatus],
   );
 
   const moveSelection = useCallback(
@@ -405,11 +555,15 @@ export default function Reader() {
         return;
       }
 
-      const current = items.findIndex((item) => item.id === selectedId);
+      const currentIndex = items.findIndex(
+        (item) => item.id === selectedItemId,
+      );
       const nextIndex =
-        current === -1
-          ? 0
-          : Math.min(items.length - 1, Math.max(0, current + step));
+        currentIndex === -1
+          ? step > 0
+            ? 0
+            : items.length - 1
+          : Math.min(items.length - 1, Math.max(0, currentIndex + step));
       const next = items[nextIndex];
       setSelectedId(next.id);
       window.requestAnimationFrame(() => {
@@ -418,11 +572,46 @@ export default function Reader() {
           ?.scrollIntoView({ block: "nearest" });
       });
     },
-    [items, selectedId],
+    [items, selectedItemId],
   );
+
+  const navigateArticle = useCallback(
+    (step: number) => {
+      if (!openArticle || items.length === 0) {
+        return;
+      }
+
+      const currentIndex = items.findIndex(
+        (item) => item.id === openArticle.id,
+      );
+      if (currentIndex === -1) {
+        return;
+      }
+
+      const nextIndex = Math.min(
+        items.length - 1,
+        Math.max(0, currentIndex + step),
+      );
+      if (nextIndex === currentIndex) {
+        return;
+      }
+      openItem(items[nextIndex]);
+    },
+    [items, openArticle, openItem],
+  );
+
+  const listScope = `${view}|${feedId ?? ""}|${label ?? ""}|${query}`;
+
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [listScope, openItemId]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || addFeedOpen || addLabelOpen || drawerOpen) {
+        return;
+      }
+
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -440,586 +629,424 @@ export default function Reader() {
       }
 
       const key = event.key.toLowerCase();
+
       if (key === "/") {
         event.preventDefault();
         searchRef.current?.focus();
         return;
       }
+
       if (key === "1") {
-        setView("unread");
+        event.preventDefault();
+        selectView("all");
         return;
       }
+
       if (key === "2") {
-        setView("all");
+        event.preventDefault();
+        selectView("unread");
         return;
       }
+
       if (key === "3") {
-        setView("starred");
+        event.preventDefault();
+        selectView("starred");
         return;
       }
+
       if (key === "r") {
         event.preventDefault();
         void refreshAll();
         return;
       }
-      if (key === "j") {
+
+      if (event.key === "Escape") {
+        if (openArticle) {
+          event.preventDefault();
+          setOpenItemId(null);
+        }
+        return;
+      }
+
+      if (key === "j" || key === "k") {
         event.preventDefault();
-        moveSelection(1);
+        if (openArticle) {
+          navigateArticle(key === "j" ? 1 : -1);
+        } else {
+          moveSelection(key === "j" ? 1 : -1);
+        }
         return;
       }
-      if (key === "k") {
+
+      if (!activeItem) {
+        return;
+      }
+
+      if (key === "o" || event.key === "Enter") {
+        if (!openArticle) {
+          event.preventDefault();
+          openItem(activeItem);
+        }
+        return;
+      }
+
+      if (key === "v" && activeItem.link) {
         event.preventDefault();
-        moveSelection(-1);
+        window.open(activeItem.link, "_blank", "noopener,noreferrer");
         return;
       }
-      if (!selected) {
-        return;
-      }
+
       if (key === "s") {
         event.preventDefault();
-        void patchItem(selected, { starred: !selected.starred });
+        void patchItem(activeItem, { starred: !activeItem.starred });
         return;
       }
+
       if (key === "m") {
         event.preventDefault();
-        void patchItem(selected, { is_read: !selected.is_read });
-        return;
-      }
-      if (key === "enter" && selected.link) {
-        event.preventDefault();
-        window.open(selected.link, "_blank", "noopener,noreferrer");
+        void patchItem(activeItem, { is_read: !activeItem.is_read });
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [moveSelection, patchItem, refreshAll, selected]);
-
-  const hasFilters = Boolean(query || label || feedId !== null);
-  const heading = query
-    ? "Search"
-    : label
-      ? label
-      : activeFeed
-        ? activeFeed.title || hostOf(activeFeed.url)
-        : VIEW_NAMES[view];
-  const eyebrow = query
-    ? `Results for “${query}”`
-    : label
-      ? "Label"
-      : activeFeed
-        ? "Feed"
-        : "Stream";
-  const emptyTitle =
-    feeds.length === 0 && !hasFilters
-      ? "Start with a feed"
-      : view === "unread" && !hasFilters
-        ? "You’re all caught up"
-        : "Nothing here yet";
-  const emptyBody =
-    feeds.length === 0
-      ? "Paste any RSS or Atom URL in the sidebar. Tributary stores it locally and never asks for an account."
-      : query
-        ? `No stored items match “${query}”. Try a broader word or refresh the feeds.`
-        : view === "starred"
-          ? "Star an item and it will wait for you here."
-          : "Refresh the feeds or change the filter to see more.";
+  }, [
+    activeItem,
+    addFeedOpen,
+    addLabelOpen,
+    drawerOpen,
+    moveSelection,
+    navigateArticle,
+    openArticle,
+    openItem,
+    patchItem,
+    refreshAll,
+    selectView,
+  ]);
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            <TributaryMark />
-          </span>
-          <div>
-            <p className="wordmark">Tributary</p>
-            <div className="brand-sub">Local feed reader</div>
-          </div>
+    <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-divider bg-canvas px-4 py-2.5 min-[700px]:h-14 min-[700px]:flex-nowrap min-[700px]:gap-4 min-[700px]:py-0">
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="icon"
+            size="icon"
+            className="min-[700px]:hidden"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open feeds and labels"
+          >
+            <Menu className="size-4" />
+          </Button>
+          <button
+            type="button"
+            onClick={goHome}
+            className="text-[20px] font-bold leading-none text-danger hover:opacity-80"
+          >
+            Tributary
+          </button>
         </div>
 
-        <div className="topbar-actions">
-          <button
-            type="button"
-            className="ghost-button mobile-filter-button"
-            onClick={() => setSidebarOpen((open) => !open)}
-            aria-expanded={sidebarOpen}
-            aria-controls="reader-sidebar"
-          >
-            <StreamIcon />
-            {sidebarOpen ? "Close" : "Browse"}
-          </button>
+        <div
+          role="search"
+          className="relative order-3 w-full min-[700px]:order-none min-[700px]:mx-auto min-[700px]:max-w-[620px] min-[700px]:flex-1"
+        >
+          <Search
+            className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-faint"
+            aria-hidden="true"
+          />
+          <Input
+            ref={searchRef}
+            type="search"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              if (openItemId !== null) {
+                setOpenItemId(null);
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder="Search Reader"
+            aria-label="Search items"
+            autoComplete="off"
+            spellCheck={false}
+            className="pl-8 pr-8 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {search && (
+            <Button
+              type="button"
+              variant="icon"
+              size="icon-xs"
+              className="absolute right-1 top-1/2 -translate-y-1/2"
+              onClick={clearSearch}
+              aria-label="Clear search"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
+        </div>
 
-          <form
-            className="search-form"
-            role="search"
-            onSubmit={(event) => event.preventDefault()}
-          >
-            <SearchIcon />
-            <input
-              ref={searchRef}
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search the stream"
-              aria-label="Search items"
-              spellCheck={false}
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearch("");
-                  setQuery("");
-                  searchRef.current?.focus();
-                }}
-                aria-label="Clear search"
-              >
-                ×
-              </button>
-            )}
-          </form>
-
-          <div className="stream-count" aria-live="polite">
-            <strong>{total}</strong>
-            <span>
-              {view === "unread"
-                ? "unread"
-                : view === "starred"
-                  ? "starred"
-                  : "in view"}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => void refreshAll()}
-            disabled={refreshing}
-          >
-            <RefreshIcon className={refreshing ? "spin" : undefined} />
-            {refreshing ? "Refreshing" : "Refresh"}
-          </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 px-2 text-[11px] text-muted"
+                />
+              }
+            >
+              <Keyboard className="size-3.5" />
+              <span className="hidden lg:inline">Shortcuts</span>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-muted">
+                Keyboard
+              </p>
+              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[12px]">
+                {SHORTCUTS.map(([keys, description]) => (
+                  <div className="contents" key={keys}>
+                    <dt>
+                      <kbd className="rounded-sm border border-line bg-chrome px-1.5 py-0.5 font-mono text-[10px] text-ink">
+                        {keys}
+                      </kbd>
+                    </dt>
+                    <dd className="self-center text-muted">{description}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-3 break-all border-t border-divider pt-2 font-mono text-[10px] text-faint">
+                {apiBase}
+              </p>
+            </PopoverContent>
+          </Popover>
         </div>
       </header>
 
-      <main className="reader-grid">
-        <aside
-          id="reader-sidebar"
-          className={`sidebar ${sidebarOpen ? "open" : ""}`}
-        >
-          <section className="panel nav-panel" aria-label="Views">
-            <p className="eyebrow">Views</p>
-            <div className="filter-list">
-              {VIEWS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  className={`filter-button ${view === option ? "active" : ""}`}
-                  onClick={() => {
-                    setView(option);
-                    setSidebarOpen(false);
-                  }}
-                  aria-pressed={view === option}
-                >
-                  <span>{VIEW_NAMES[option]}</span>
-                  <span className="filter-key">{VIEW_KEYS[option]}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="panel feed-panel" aria-label="Feeds">
-            <div className="panel-head">
-              <p className="eyebrow">Feeds</p>
-              <span className="count">{feeds.length}</span>
-            </div>
-
-            <div className="feed-list">
-              <button
-                type="button"
-                className={`feed-button ${feedId === null ? "active" : ""}`}
-                onClick={() => {
-                  setFeedId(null);
-                  setSidebarOpen(false);
-                }}
-              >
-                <span className="feed-name">All feeds</span>
-                <span className="count">{feeds.length}</span>
-              </button>
-
-              {feeds.map((feed) => (
-                <button
-                  key={feed.id}
-                  type="button"
-                  className={`feed-button ${feedId === feed.id ? "active" : ""}`}
-                  onClick={() => {
-                    setFeedId(feed.id);
-                    setSidebarOpen(false);
-                  }}
-                  title={feed.url}
-                >
-                  <span className="feed-name">
-                    {feed.title || hostOf(feed.url)}
-                  </span>
-                  {feed.last_error && (
-                    <span
-                      className="feed-error"
-                      title={feed.last_error}
-                      aria-label="The last refresh failed"
-                    >
-                      !
-                    </span>
-                  )}
-                </button>
-              ))}
-
-              {feeds.length === 0 && (
-                <p className="muted small">No feeds yet. Add one below.</p>
-              )}
-            </div>
-
-            <form className="add-feed" onSubmit={submitFeed}>
-              <label className="sr-only" htmlFor="feed-url">
-                Feed URL
-              </label>
-              <input
-                id="feed-url"
-                type="text"
-                inputMode="url"
-                value={feedUrl}
-                onChange={(event) => setFeedUrl(event.target.value)}
-                placeholder="https://hnrss.org/frontpage"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={addingFeed || !feedUrl.trim()}
-              >
-                {addingFeed ? "Adding…" : "Add feed"}
-              </button>
-            </form>
-          </section>
-
-          <section className="panel label-panel" aria-label="Labels">
-            <div className="panel-head">
-              <p className="eyebrow">Labels</p>
-              <span className="count">{labels.length}</span>
-            </div>
-
-            <div className="label-cloud">
-              {labels.length === 0 ? (
-                <span className="muted small">No labels yet.</span>
-              ) : (
-                labels.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className={`label-chip ${label === entry.name ? "active" : ""}`}
-                    onClick={() => {
-                      setLabel((current) =>
-                        current === entry.name ? null : entry.name,
-                      );
-                      setSidebarOpen(false);
-                    }}
-                    aria-pressed={label === entry.name}
-                  >
-                    {entry.name}
-                  </button>
-                ))
-              )}
-            </div>
-
-            <form className="add-feed" onSubmit={submitLabel}>
-              <label className="sr-only" htmlFor="label-name">
-                New label
-              </label>
-              <input
-                id="label-name"
-                type="text"
-                value={newLabel}
-                onChange={(event) => setNewLabel(event.target.value)}
-                placeholder="New label"
-                maxLength={100}
-                autoComplete="off"
-              />
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={addingLabel || !newLabel.trim()}
-              >
-                {addingLabel ? "Adding…" : "Add label"}
-              </button>
-            </form>
-          </section>
-
-          <div className="keys" aria-hidden="true">
-            <span>
-              <kbd>j</kbd>
-              <kbd>k</kbd> move
-            </span>
-            <span>
-              <kbd>s</kbd> star
-            </span>
-            <span>
-              <kbd>m</kbd> read
-            </span>
-            <span>
-              <kbd>r</kbd> refresh
-            </span>
-            <span>
-              <kbd>/</kbd> search
-            </span>
-          </div>
-        </aside>
-
-        <section
-          className="panel list-panel"
-          aria-label="Story list"
-          aria-busy={loading}
-        >
-          <div className="list-head">
-            <div>
-              <p className="eyebrow">{eyebrow}</p>
-              <h1>{heading}</h1>
-            </div>
-            <span className="list-count">
-              {loading ? "Loading…" : plural(total, "item")}
-            </span>
-          </div>
-
-          {loading && items.length === 0 ? (
-            <div className="item-list" aria-hidden="true">
-              {[0, 1, 2, 3, 4].map((row) => (
-                <div className="skeleton-row" key={row}>
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              ))}
-            </div>
-          ) : items.length === 0 ? (
-            <div className="empty-list">
-              <span className="empty-mark">
-                <StreamIcon />
-              </span>
-              <h2>{emptyTitle}</h2>
-              <p>{emptyBody}</p>
-              {feeds.length === 0 && (
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => document.getElementById("feed-url")?.focus()}
-                >
-                  Add a feed
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="item-list">
-              {items.map((item, index) => {
-                const preview = excerpt(item.content);
-                return (
-                  <button
-                    key={item.id}
-                    id={`item-${item.id}`}
-                    type="button"
-                    className={`item-row ${item.is_read ? "read" : "unread"} ${
-                      selectedId === item.id ? "selected" : ""
-                    }`}
-                    style={
-                      { "--row-index": Math.min(index, 12) } as CSSProperties
-                    }
-                    onClick={() => openItem(item)}
-                    aria-current={selectedId === item.id ? "true" : undefined}
-                  >
-                    <span className="stream-dot" aria-hidden="true" />
-                    <span className="item-row-body">
-                      <span className="item-row-top">
-                        <span className="item-feed">
-                          {feedNames.get(item.feed_id) ?? "Unknown feed"}
-                        </span>
-                        <span className="item-date">
-                          {formatRelative(item.published ?? item.fetched_at)}
-                        </span>
-                      </span>
-                      <span className="item-title">
-                        {item.title || "Untitled"}
-                      </span>
-                      {preview && (
-                        <span className="item-excerpt">{preview}</span>
-                      )}
-                      {item.labels.length > 0 && (
-                        <span className="item-labels">
-                          {item.labels.map((entry) => (
-                            <span className="item-label" key={entry.id}>
-                              {entry.name}
-                            </span>
-                          ))}
-                        </span>
-                      )}
-                    </span>
-                    {item.starred && (
-                      <StarIcon filled className="item-star" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        <article className="panel reading-pane" ref={readingRef}>
-          {selected ? (
-            <>
-              <div className="reading-kicker">
-                <span className="reading-source">
-                  {feedNames.get(selected.feed_id) ?? "Unknown feed"}
-                </span>
-                <span>
-                  {formatFullDate(selected.published ?? selected.fetched_at)}
-                </span>
-                {readingTime > 0 && <span>{readingTime} min read</span>}
-                {selected.decision && (
-                  <span>{selected.decision === "keep" ? "Kept" : "Dropped"}</span>
-                )}
-              </div>
-
-              <h1>{selected.title || "Untitled"}</h1>
-
-              <div className="reading-labels">
-                <span className="eyebrow">Labels</span>
-                <div className="label-cloud">
-                  {labels.length === 0 ? (
-                    <span className="muted small">
-                      Create one in the sidebar to tag this item.
-                    </span>
-                  ) : (
-                    labels.map((entry) => {
-                      const attached = selected.labels.some(
-                        (itemLabel) => itemLabel.id === entry.id,
-                      );
-                      return (
-                        <button
-                          key={entry.id}
-                          type="button"
-                          className={`label-chip ${attached ? "active" : ""}`}
-                          onClick={() => void toggleLabel(selected, entry)}
-                          aria-pressed={attached}
-                        >
-                          {entry.name}
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div className="reading-actions">
-                <button
-                  type="button"
-                  className={`action-button ${selected.starred ? "active" : ""}`}
-                  onClick={() => toggleStar(selected)}
-                  aria-pressed={selected.starred}
-                >
-                  <StarIcon filled={selected.starred} />
-                  {selected.starred ? "Starred" : "Star"}
-                </button>
-
-                <button
-                  type="button"
-                  className="action-button"
-                  onClick={() => toggleRead(selected)}
-                >
-                  <CheckIcon />
-                  {selected.is_read ? "Mark unread" : "Mark read"}
-                </button>
-
-                {selected.link && (
-                  <a
-                    className="action-button link-button"
-                    href={selected.link}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <ExternalIcon />
-                    Open original
-                  </a>
-                )}
-              </div>
-
-              <div className="reading-body">
-                {readingBody || (
-                  <span className="muted">
-                    This feed only included a title. Open the original to read
-                    the rest.
-                  </span>
-                )}
-              </div>
-
-              <div className="taste-row">
-                <span className="eyebrow">Your taste</span>
-                <div className="taste-buttons">
-                  <button
-                    type="button"
-                    className={`taste-button ${
-                      selected.decision === "keep" ? "keep" : ""
-                    }`}
-                    onClick={() => toggleDecision(selected, "keep")}
-                    aria-pressed={selected.decision === "keep"}
-                  >
-                    Keep
-                  </button>
-                  <button
-                    type="button"
-                    className={`taste-button ${
-                      selected.decision === "drop" ? "drop" : ""
-                    }`}
-                    onClick={() => toggleDecision(selected, "drop")}
-                    aria-pressed={selected.decision === "drop"}
-                  >
-                    Drop
-                  </button>
-                </div>
-                <span className="taste-hint">
-                  <SparkIcon /> A local training signal. Nothing leaves this
-                  machine.
-                </span>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">
-              <span className="empty-mark">
-                <StreamIcon />
-              </span>
-              <h2>{loading ? "Opening the stream" : "Choose an item"}</h2>
-              <p>
-                {loading
-                  ? "Reading the local database."
-                  : "Pick a story from the list. The full text stays in your own database."}
-              </p>
-            </div>
-          )}
-        </article>
-      </main>
-
-      {toast && (
-        <div
-          className={`toast ${toast.error ? "error" : ""}`}
-          role={toast.error ? "alert" : "status"}
-        >
-          <span>{toast.message}</span>
-          <button
+      <div className="flex min-h-10 shrink-0 items-center justify-between gap-3 border-b border-divider bg-canvas px-4 max-[700px]:px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
             type="button"
-            onClick={() => setToast(null)}
-            aria-label="Dismiss notification"
+            variant="primary"
+            size="sm"
+            className="max-[700px]:h-8"
+            onClick={() => setAddFeedOpen(true)}
           >
-            ×
-          </button>
+            <Plus className="size-3.5" />
+            Add feed
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="gap-1.5 max-[700px]:h-8"
+            onClick={() => void refreshAll()}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw className="size-3.5" aria-hidden="true" />
+            )}
+            <span className="max-[420px]:hidden">
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </span>
+          </Button>
+        </div>
+
+        <nav
+          aria-label="Views"
+          className="flex shrink-0 items-center gap-4 text-[13px] max-[700px]:gap-3 max-[700px]:text-[12px]"
+        >
+          {VIEWS.map((entry) => {
+            const active = view === entry;
+            return (
+              <button
+                key={entry}
+                type="button"
+                onClick={() => selectView(entry)}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "whitespace-nowrap",
+                  active
+                    ? "font-bold text-ink underline underline-offset-4"
+                    : "text-muted hover:text-ink",
+                )}
+              >
+                {VIEW_NAMES[entry]}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {banner && (
+        <div
+          role={banner.error ? "alert" : "status"}
+          aria-live={banner.error ? "assertive" : "polite"}
+          className={cn(
+            "flex shrink-0 items-start gap-2 border-b border-divider bg-canvas px-4 py-1.5 text-[12px] leading-5 max-[700px]:px-3",
+            banner.error ? "text-danger" : "text-muted",
+          )}
+        >
+          {banner.error ? (
+            <TriangleAlert
+              className="mt-0.5 size-3.5 shrink-0"
+              aria-hidden="true"
+            />
+          ) : (
+            <CircleCheck
+              className="mt-0.5 size-3.5 shrink-0 text-success"
+              aria-hidden="true"
+            />
+          )}
+          <span className="min-w-0 flex-1">{banner.message}</span>
+          {status && (
+            <Button
+              type="button"
+              variant="icon"
+              size="icon-xs"
+              className="-mr-1 -mt-0.5 text-faint hover:text-ink"
+              onClick={() => setStatus(null)}
+              aria-label="Dismiss message"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
         </div>
       )}
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 min-[700px]:grid-cols-[240px_minmax(0,1fr)]">
+        <aside className="hidden min-h-0 border-r border-divider min-[700px]:block">
+          <Sidebar
+            feeds={feeds}
+            feedCounts={feedCounts}
+            labels={labels}
+            view={view}
+            feedId={feedId}
+            label={label}
+            viewCounts={counts}
+            onSelectView={selectView}
+            onSelectFeed={selectFeed}
+            onSelectLabel={selectLabel}
+            onAddFeed={() => setAddFeedOpen(true)}
+            onAddLabel={() => setAddLabelOpen(true)}
+          />
+        </aside>
+
+        <main
+          ref={contentRef}
+          className="min-h-0 overflow-y-auto overscroll-contain bg-canvas"
+        >
+          {openArticle ? (
+            <ArticleView
+              item={openArticle}
+              feedName={
+                feedNames.get(openArticle.feed_id) ?? "Unknown feed"
+              }
+              feedCount={feedCounts[openArticle.feed_id] ?? 0}
+              labels={labels}
+              contextLabel={contextLabel}
+              onBack={() => setOpenItemId(null)}
+              onToggleStar={toggleStar}
+              onToggleRead={toggleRead}
+              onToggleDecision={toggleDecision}
+              onToggleLabel={toggleLabel}
+              onSelectFeed={selectFeed}
+            />
+          ) : (
+            <ArticleList
+              items={items}
+              total={total}
+              loading={loading}
+              heading={heading}
+              query={query}
+              view={view}
+              hasFeeds={feeds.length > 0}
+              hasFilters={hasFilters}
+              feedNames={feedNames}
+              feedCounts={feedCounts}
+              labels={labels}
+              selectedId={selectedItemId}
+              onOpen={openItem}
+              onToggleStar={toggleStar}
+              onToggleRead={toggleRead}
+              onToggleLabel={toggleLabel}
+              onSelectFeed={selectFeed}
+              onSelectView={selectView}
+              onAddFeed={() => setAddFeedOpen(true)}
+              onClearSearch={clearSearch}
+            />
+          )}
+        </main>
+      </div>
+
+      <AddFeedDialog
+        open={addFeedOpen}
+        onOpenChange={setAddFeedOpen}
+        onSubmit={submitFeed}
+      />
+      <AddLabelDialog
+        open={addLabelOpen}
+        onOpenChange={setAddLabelOpen}
+        onSubmit={submitLabel}
+      />
+
+      <Dialog open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <DialogContent
+          showCloseButton={false}
+          className="left-0 top-0 h-dvh w-[280px] max-w-[calc(100vw-48px)] translate-x-0 translate-y-0 rounded-none border-y-0 border-l-0 border-r border-divider bg-sidebar p-0"
+        >
+          <div className="flex h-full flex-col">
+            <DialogHeader className="min-h-12 justify-between px-3 pr-2">
+              <DialogTitle className="text-[13px]">
+                Feeds & labels
+              </DialogTitle>
+              <DialogClose className="grid size-8 place-items-center rounded-sm text-muted hover:bg-[#e8e8e8] hover:text-ink">
+                <X className="size-4" aria-hidden="true" />
+                <span className="sr-only">Close</span>
+              </DialogClose>
+            </DialogHeader>
+            <div className="min-h-0 flex-1">
+              <Sidebar
+                feeds={feeds}
+                feedCounts={feedCounts}
+                labels={labels}
+                view={view}
+                feedId={feedId}
+                label={label}
+                viewCounts={counts}
+                onSelectView={(next) => {
+                  selectView(next);
+                  setDrawerOpen(false);
+                }}
+                onSelectFeed={(next) => {
+                  selectFeed(next);
+                  setDrawerOpen(false);
+                }}
+                onSelectLabel={(next) => {
+                  selectLabel(next);
+                  setDrawerOpen(false);
+                }}
+                onAddFeed={() => {
+                  setDrawerOpen(false);
+                  setAddFeedOpen(true);
+                }}
+                onAddLabel={() => {
+                  setDrawerOpen(false);
+                  setAddLabelOpen(true);
+                }}
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
