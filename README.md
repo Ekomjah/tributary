@@ -4,7 +4,7 @@
 
 Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to mash feeds together) and Google Reader (a calm reader with unread, stars and labels). Here the boxes can be small local-model steps such as "summarize" or "filter by meaning", and everything runs on your own machine.
 
-> Status: Phase 1 of the MVP is in place — backend scaffold, SQLite schema and API health check. The pipe engine, reader, AI boxes and editor are in progress. Built for the DEV Hacktoberfest Open-Source AI Challenge, Week 4. Numbers marked `TODO` are filled in from real runs before release.
+> Status: Phase 2 of the MVP is in place — backend scaffold, SQLite schema, feed fetching and the `tributary` CLI. The pipe engine, reader, AI boxes and editor are in progress. Built for the DEV Hacktoberfest Open-Source AI Challenge, Week 4. Numbers marked `TODO` are filled in from real runs before release.
 
 ## What it does
 
@@ -83,24 +83,28 @@ Training notes and the export steps (adapter, merge, GGUF, Ollama) are in `docs/
 
 Copy `.env.example` to `.env`. Nothing is required for basic use.
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `TRIBUTARY_DB_PATH` | SQLite database file, relative to the repo root or absolute | `tributary.db` |
-| `OLLAMA_MODEL` | Model used by the AI boxes | `gemma3:1b` |
-| `OLLAMA_HOST` | Ollama address | `http://localhost:11434` |
-| `SENTRY_DSN` | Enable Sentry error monitoring (opt-in) | empty (off) |
-| `ELEVENLABS_API_KEY` | Enable cloud read-aloud (planned, not in the MVP backend yet) | empty (off) |
+| Variable                      | Purpose                                                          | Default                  |
+| ----------------------------- | ---------------------------------------------------------------- | ------------------------ |
+| `TRIBUTARY_DB_PATH`           | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
+| `OLLAMA_MODEL`                | Model used by the AI boxes                                       | `gemma3:1b`              |
+| `OLLAMA_HOST`                 | Ollama address                                                   | `http://localhost:11434` |
+| `SENTRY_DSN`                  | Sentry project DSN. Monitoring is on by default once this is set | empty (inactive)         |
+| `SENTRY_ENABLED`              | Set to `false` to opt out of Sentry                              | `true`                   |
+| `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1                            | `0.25`                   |
+| `SENTRY_PROFILES_SAMPLE_RATE` | Share of traces profiled, from 0 to 1                            | `0.1`                    |
+| `TRIBUTARY_FETCH_TIMEOUT`     | Seconds before a feed request times out                          | `20`                     |
+| `ELEVENLABS_API_KEY`          | Enable cloud read-aloud (planned, not in the MVP backend yet)    | empty (off)              |
 
 ## Privacy
 
 - Your feeds, stars and labels stay on your machine in a local SQLite file.
 - Article text goes only to your local model. It is never sent to a cloud service.
-- Sentry and ElevenLabs are off unless you set their keys. With Sentry on, article text is redacted by default. With ElevenLabs on, only the short script you are about to hear is sent.
+- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, local variables or default PII. ElevenLabs stays off unless you set its key, and then only the short script you are about to hear is sent.
 - Without an ElevenLabs key, read-aloud uses a local voice.
 
 ## Monitoring
 
-With `SENTRY_DSN` set, each pipe run is one trace and each box is one span. AI spans record the model, tokens and latency, and dead feeds are captured as errors.
+Sentry is enabled by default when a DSN is configured. Feed refreshes record duration, new-item counts and failures as errors and metrics; each pipe run will be one trace with a span per box. AI spans will record the model, tokens and latency. Set `SENTRY_ENABLED=false` to turn all of it off.
 
 ## Hosted demo
 

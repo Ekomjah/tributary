@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 from typing import Annotated
 
+import sentry_sdk
 import typer
 
 from . import __version__
 from .config import Settings, get_settings
-from .db import create_engine, init_db
+from .db import create_engine, create_session_factory, init_db, session_scope
+from .services import feeds
 
 app = typer.Typer(
     name="tributary",
@@ -31,6 +33,8 @@ def _load_settings(db_path: Path | None = None) -> Settings:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     return _settings_with_db_path(settings, db_path)
 
 
@@ -43,6 +47,18 @@ def _version_callback(value: bool) -> None:
 def _not_implemented(phase: str) -> None:
     typer.echo(f"This command is part of {phase} and is not implemented yet.", err=True)
     raise typer.Exit(code=2)
+
+
+def _print_fetch_result(result: feeds.FetchResult) -> None:
+    label = result.title or result.url
+    if result.error:
+        typer.echo(f"{label}: {result.error}", err=True)
+    elif result.not_modified:
+        typer.echo(f"{label}: not modified")
+    else:
+        typer.echo(
+            f"{label}: {result.new_items} new item(s), {result.total_entries} entry/entries"
+        )
 
 
 @app.callback()
@@ -111,22 +127,58 @@ def init_database(
 
 
 @app.command("fetch")
-def fetch_feed(
-    url: Annotated[str, typer.Argument(help="Feed URL to fetch and store.")],
+def fetch(
+    url: Annotated[str, typer.Argument(help="Feed URL to fetch and subscribe to.")],
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
 ) -> None:
-    """Fetch and store one feed."""
-    _load_settings(db)
-    _not_implemented("phase 2")
+    """Fetch one feed and save its new items."""
+    settings = _load_settings(db)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with (
+            sentry_sdk.start_transaction(name="feed.fetch", op="task"),
+            feeds.make_client(settings) as client,
+            session_scope(factory) as session,
+        ):
+            result = feeds.fetch_feed(session, url, client=client)
+    except Exception as exc:
+        typer.echo(f"Could not fetch {url}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    _print_fetch_result(result)
+    if result.error:
+        raise typer.Exit(code=1)
 
 
 @app.command("refresh")
-def refresh_feeds(
+def refresh(
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
 ) -> None:
-    """Refresh every subscription."""
-    _load_settings(db)
-    _not_implemented("phase 3")
+    """Refresh every subscribed feed."""
+    settings = _load_settings(db)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        results = feeds.refresh_feeds(create_session_factory(engine), settings)
+    except Exception as exc:
+        typer.echo(f"Could not refresh feeds: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not results:
+        typer.echo("No feeds yet. Add one with `tributary fetch <url>`.")
+        return
+
+    for result in results:
+        _print_fetch_result(result)
+
+    if any(not result.ok for result in results):
+        raise typer.Exit(code=1)
 
 
 @app.command("run")

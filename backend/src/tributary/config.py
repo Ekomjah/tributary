@@ -48,9 +48,44 @@ class Settings(BaseSettings):
         default="INFO",
         validation_alias=AliasChoices("TRIBUTARY_LOG_LEVEL", "LOG_LEVEL"),
     )
+    fetch_timeout: float = Field(
+        default=20.0,
+        gt=0,
+        validation_alias=AliasChoices("TRIBUTARY_FETCH_TIMEOUT", "FETCH_TIMEOUT"),
+    )
+    user_agent: str = Field(
+        default="Tributary/0.1 (+https://github.com/Ekomjah/tributary)",
+        validation_alias=AliasChoices("TRIBUTARY_USER_AGENT", "USER_AGENT"),
+    )
     sentry_dsn: str | None = Field(
         default=None,
         validation_alias=AliasChoices("SENTRY_DSN", "TRIBUTARY_SENTRY_DSN"),
+    )
+    sentry_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SENTRY_ENABLED", "TRIBUTARY_SENTRY_ENABLED"),
+    )
+    sentry_environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices("SENTRY_ENVIRONMENT", "TRIBUTARY_SENTRY_ENVIRONMENT"),
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "SENTRY_TRACES_SAMPLE_RATE",
+            "TRIBUTARY_SENTRY_TRACES_SAMPLE_RATE",
+        ),
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "SENTRY_PROFILES_SAMPLE_RATE",
+            "TRIBUTARY_SENTRY_PROFILES_SAMPLE_RATE",
+        ),
     )
     cors_origins: list[str] = [
         "http://localhost:3000",

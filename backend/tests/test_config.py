@@ -12,6 +12,9 @@ def test_settings_have_local_defaults(monkeypatch) -> None:
 
     assert settings.app_name == "Tributary"
     assert settings.ollama_model == "gemma3:1b"
+    assert settings.sentry_enabled is True
+    assert settings.sentry_traces_sample_rate > 0
+    assert settings.fetch_timeout == 20.0
     assert settings.database_url.startswith("sqlite:///")
     assert settings.cors_origins == [
         "http://localhost:3000",
