@@ -1284,6 +1284,21 @@ wheels = [
 ]
 
 [[package]]
+name = "requests"
+version = "2.34.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "charset-normalizer" },
+    { name = "idna" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", size = 73075, upload-time = "2026-05-14T19:25:26.443Z" },
+]
+
+[[package]]
 name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1332,6 +1347,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c5/3b/1e47acf2456781c26e12007379ecc154bf310b8f64d40390d78b791d55c3/sentry_sdk-2.73.0.tar.gz", hash = "sha256:4a2ab97b16e4693c325ab361c7bbbb346dbc7d0bc0150922d795a25bac8d5280", size = 1079078, upload-time = "2026-10-22T09:08:49.63Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/88/cabf98d017d7b940720e514e5f8ee02e3e6f7495caf93c30735a38387ec4/sentry_sdk-2.73.0-py3-none-any.whl", hash = "sha256:0bcfa6928ea5adbb89591858b514d27adac27c7a3cccc31b20ed10e0b09eda9e", size = 549011, upload-time = "2026-10-22T09:08:47.88Z" },
+]
+
+[[package]]
+name = "serpapi"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/cb/9b20af90c3481b424d988104be3a8ec096971b0fa2aaa6b4263e27e92503/serpapi-1.1.2.tar.gz", hash = "sha256:c4a16b5c99c3b34469cef12a3c9c74be18912324baad74d67d1d8820d4401b24", size = 76556, upload-time = "2026-09-22T05:40:13.884Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/3f/543ef4d3f5004134ce2bdc3f79313cfae37e739a29db4477febed918e55d/serpapi-1.1.2-py3-none-any.whl", hash = "sha256:446943df71e8afde69906be7e918b44c8d6cdcb84e69c37d01112c313945b384", size = 11288, upload-time = "2026-09-22T05:40:12.733Z" },
 ]
 
 [[package]]
@@ -1648,6 +1675,7 @@ dependencies = [
     { name = "pydantic-settings", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pydantic-settings", version = "2.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sentry-sdk" },
+    { name = "serpapi" },
     { name = "sqlalchemy", version = "2.0.55", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sqlalchemy", version = "2.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "trafilatura" },
@@ -1669,6 +1697,7 @@ requires-dist = [
     { name = "ollama", specifier = ">=0.6.3" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "sentry-sdk", specifier = ">=2.73.0" },
+    { name = "serpapi", specifier = ">=1.1.2" },
     { name = "sqlalchemy", specifier = ">=2.0.55" },
     { name = "trafilatura", specifier = ">=2.3.1" },
     { name = "typer", specifier = ">=0.27.3" },

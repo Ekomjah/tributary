@@ -14,6 +14,7 @@ dependencies = [
     "ollama>=0.6.3",
     "pydantic-settings>=2.15.0",
     "sentry-sdk>=2.73.0",
+    "serpapi>=1.1.2",
     "sqlalchemy>=2.0.55",
     "trafilatura>=2.3.1",
     "typer>=0.27.3",
