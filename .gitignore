@@ -27,5 +27,7 @@ frontend/out/
 # Local tooling
 .opencode/
 
+plan.md
+
 # Editor/OS noise
 .DS_Store
