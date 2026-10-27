@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -9,6 +10,8 @@ import sentry_sdk
 import typer
 
 from . import __version__
+from .boxes import BoxError, PipeSpecError, RunContext, load_pipe_spec
+from .boxes import run_pipe as execute_pipe
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
 from .observability import init_sentry
@@ -51,8 +54,8 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-def _not_implemented(phase: str) -> None:
-    typer.echo(f"This command is part of {phase} and is not implemented yet.", err=True)
+def _not_implemented(feature: str) -> None:
+    typer.echo(f"{feature} is not implemented yet.", err=True)
     raise typer.Exit(code=2)
 
 
@@ -90,7 +93,7 @@ def serve(
     reload: Annotated[bool, typer.Option("--reload", help="Reload on code changes.")] = False,
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
 ) -> None:
-    """Run the API and reader."""
+    """Run the Tributary API server."""
     import uvicorn
 
     settings = _load_settings(db)
@@ -189,13 +192,52 @@ def refresh(
 
 
 @app.command("run")
-def run_pipe(
+def run_pipe_file(
     path: Annotated[Path, typer.Argument(help="Path to a pipe JSON file.")],
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the final items as JSON."),
+    ] = False,
 ) -> None:
     """Run a pipe JSON file."""
-    _load_settings(db)
-    _not_implemented("phase 3")
+    settings = _load_settings(db)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with (
+            sentry_sdk.start_transaction(name="pipe.run", op="task") as transaction,
+            feeds.make_client(settings) as client,
+            session_scope(factory) as session,
+        ):
+            spec = load_pipe_spec(path)
+            transaction.set_data("pipe.name", spec.name or path.stem)
+            result = execute_pipe(
+                spec,
+                RunContext(session=session, settings=settings, client=client),
+            )
+    except (PipeSpecError, BoxError) as exc:
+        typer.echo(f"Pipe failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:
+        typer.echo(f"Pipe failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if json_output:
+        payload = [item.model_dump(mode="json") for item in result.items]
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    title = result.name or path.stem
+    typer.echo(f"{title}: {len(result.items)} item(s) in {result.seconds:.2f}s")
+    for index, item in enumerate(result.items, start=1):
+        published = item.published.date().isoformat() if item.published else "no date"
+        typer.echo(f"{index:>2}. {item.title} ({published})")
+        if item.link:
+            typer.echo(f"    {item.link}")
 
 
 @app.command("export")
@@ -204,7 +246,7 @@ def export_training(
 ) -> None:
     """Export labelled items as JSONL."""
     _load_settings(db)
-    _not_implemented("phase 5")
+    _not_implemented("Training export")
 
 
 def main() -> None:

@@ -1,12 +1,16 @@
 {
-  "name": "Dependency releases, one line each",
+  "name": "Dependency releases, newest first",
   "steps": [
     {
       "box": "fetch",
-      "urls": ["https://github.com/fastapi/fastapi/releases.atom"]
+      "urls": [
+        "https://github.com/fastapi/fastapi/releases.atom",
+        "https://github.com/encode/uvicorn/releases.atom"
+      ]
     },
-    { "box": "dedupe" },
-    { "box": "summarize", "style": "one line" },
-    { "box": "sort", "by": "published", "order": "desc" }
+    { "box": "merge" },
+    { "box": "dedupe", "by": "link" },
+    { "box": "sort", "by": "published", "order": "desc" },
+    { "box": "limit", "count": 10 }
   ]
 }
