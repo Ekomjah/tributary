@@ -123,6 +123,21 @@ A read-only cloud demo is a future deployment profile, not part of this build. I
 
 ## Development
 
+The root `Makefile` wraps the common commands:
+
+```bash
+make setup       # install backend and frontend dependencies
+make dev         # run the API and reader together
+make dev-api     # API only, at http://127.0.0.1:8000
+make dev-client  # reader only, at http://localhost:3000
+make test-api    # backend tests
+make check-api   # backend lint and tests
+make check-client # frontend lint and production build
+make ci          # everything CI runs
+```
+
+Run `make help` for the full list. The underlying commands are:
+
 ```bash
 cd backend
 uv sync --group dev
