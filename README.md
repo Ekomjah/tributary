@@ -4,7 +4,7 @@
 
 Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to mash feeds together) and Google Reader (a calm reader with unread, stars and labels). Here the boxes can be small local-model steps such as "summarize" or "filter by meaning", and everything runs on your own machine.
 
-> Status: built for the DEV Hacktoberfest Open-Source AI Challenge, Week 4. Numbers marked `TODO` are filled in from real runs before release.
+> Status: Phase 1 of the MVP is in place — backend scaffold, SQLite schema and API health check. The pipe engine, reader, AI boxes and editor are in progress. Built for the DEV Hacktoberfest Open-Source AI Challenge, Week 4. Numbers marked `TODO` are filled in from real runs before release.
 
 ## What it does
 
@@ -23,16 +23,18 @@ git clone https://github.com/Ekomjah/tributary
 cd tributary
 ollama pull gemma3:1b
 cp .env.example .env
+cd backend
 uv sync
+uv run tributary init-db
 uv run tributary serve
 ```
 
 Open <http://localhost:8000>.
 
-Run a pipe without the browser:
+Run a pipe without the browser (from `backend/`):
 
 ```bash
-uv run tributary run pipes/example.json
+uv run tributary run ../pipes/example.json
 ```
 
 Or with Docker: `docker compose up`.
@@ -61,7 +63,7 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [AI boxes] -> [Sort] -> reader / spok
                                     Ollama (base or tuned model)
 ```
 
-- **Engine:** Python, FastAPI, feedparser, trafilatura, SQLite.
+- **Engine:** Python, FastAPI, feedparser, SQLAlchemy, SQLite.
 - **Editor and reader:** Next.js with React Flow, exported as static files and served by the engine, so one process runs everything.
 - **Model:** `gemma3:1b` by default. A tuned model trained on Tinker can be swapped in with an environment variable.
 - **Results are cached** per item and per box, so only new items hit the model.
@@ -83,10 +85,11 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
+| `TRIBUTARY_DB_PATH` | SQLite database file, relative to the repo root or absolute | `tributary.db` |
 | `OLLAMA_MODEL` | Model used by the AI boxes | `gemma3:1b` |
 | `OLLAMA_HOST` | Ollama address | `http://localhost:11434` |
-| `SENTRY_DSN` | Enable monitoring (opt-in) | empty (off) |
-| `ELEVENLABS_API_KEY` | Enable cloud read-aloud (opt-in) | empty (off) |
+| `SENTRY_DSN` | Enable monitoring (planned, not in the MVP backend yet) | empty (off) |
+| `ELEVENLABS_API_KEY` | Enable cloud read-aloud (planned, not in the MVP backend yet) | empty (off) |
 
 ## Privacy
 
@@ -112,6 +115,7 @@ A read-only demo with sample feeds and pre-computed results runs at <https://tri
 ## Development
 
 ```bash
+cd backend
 uv sync --group dev
 uv run pytest
 uv run ruff check .
@@ -121,4 +125,4 @@ This project's coding sessions are recorded with [Entire](https://entire.io); th
 
 ## License
 
-TODO: choose a license (MIT is a common default).
+MIT. See [LICENSE](LICENSE).

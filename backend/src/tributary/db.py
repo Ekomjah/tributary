@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import DateTime, MetaData, create_engine as sa_create_engine, event
+from sqlalchemy import DateTime, MetaData, event
+from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator

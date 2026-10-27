@@ -1,0 +1,12 @@
+{
+  "name": "Dependency releases, one line each",
+  "steps": [
+    {
+      "box": "fetch",
+      "urls": ["https://github.com/fastapi/fastapi/releases.atom"]
+    },
+    { "box": "dedupe" },
+    { "box": "summarize", "style": "one line" },
+    { "box": "sort", "by": "published", "order": "desc" }
+  ]
+}

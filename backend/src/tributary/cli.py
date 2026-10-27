@@ -59,7 +59,7 @@ def _serve(args: argparse.Namespace, settings: Settings) -> int:
 
     if args.reload:
         uvicorn.run(
-            "backend.main:app",
+            "tributary.main:app",
             host=host,
             port=port,
             reload=True,
