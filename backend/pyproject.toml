@@ -1,0 +1,35 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ekomjah Edet", email = "ekomjahedet@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "alembic>=1.20.1",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.162.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "ollama>=0.6.3",
+    "pydantic-settings>=2.15.0",
+    "sentry-sdk>=2.73.0",
+    "sqlalchemy>=2.0.55",
+    "trafilatura>=2.3.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+backend = "backend:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.3",
+]
