@@ -25,8 +25,9 @@ per-feed error isolation, GUID/link normalization, deduplication, trafilatura
 cleaning for substantial feed HTML, and the `tributary fetch` and
 `tributary refresh` commands.
 
-Next: Phase 3 (the box engine and `tributary run`), then the API, reader, and AI
-cache.
+Next: Phase 3 (the box engine and `tributary run`), then the API, reader, AI
+cache, and the opt-in SerpAPI search box (Phase 6). SerpAPI needs no new SDK:
+the box calls its REST endpoint with the existing `httpx` client.
 
 ## Why a CLI?
 

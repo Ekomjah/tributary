@@ -73,6 +73,18 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [AI boxes] -> [Sort] -> reader / spok
 - **Model:** `gemma3:1b` by default. A tuned model trained on Tinker can be swapped in with an environment variable.
 - **Results are cached** per item and per box, so only new items hit the model.
 
+## Roadmap
+
+| Phase | Ships | Status |
+| --- | --- | --- |
+| 3. Box engine | JSON pipe loader, Fetch/Merge/Dedupe/Filter/Sort/Limit boxes, `tributary run` | Next |
+| 4. API and reader | Feed, item, pipe and run endpoints; unread/star filters; keyboard-first reader | Planned |
+| 5. AI boxes and cache | Summarize, Filter by meaning, Why you'd care; per-item cache; JSONL export | Planned |
+| 6. SerpAPI search | Opt-in query box and related links; cached, rate-limited, off without a key | Planned |
+| 7. Editor and demo | React Flow canvas, save/load pipes, run preview, hosted demo | Planned |
+
+The SerpAPI box calls the REST API with the existing `httpx` client, so it adds no SDK dependency.
+
 ## Fine-tuned filter
 
 The "Filter by meaning" and "Why you'd care" boxes can use a small open model tuned on your own stars and skips.
@@ -93,18 +105,19 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 | `TRIBUTARY_DB_PATH`           | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
 | `OLLAMA_MODEL`                | Model used by the AI boxes                                       | `gemma3:1b`              |
 | `OLLAMA_HOST`                 | Ollama address                                                   | `http://localhost:11434` |
-| `SENTRY_DSN`                  | Sentry project DSN. Monitoring is on by default once this is set | empty (inactive)         |
+| `SENTRY_DSN`                  | Sentry project DSN. Monitoring is on by default once this is set | sample in `.env.example` |
 | `SENTRY_ENABLED`              | Set to `false` to opt out of Sentry                              | `true`                   |
 | `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1                            | `0.25`                   |
 | `SENTRY_PROFILES_SAMPLE_RATE` | Share of traces profiled, from 0 to 1                            | `0.1`                    |
 | `TRIBUTARY_FETCH_TIMEOUT`     | Seconds before a feed request times out                          | `20`                     |
+| `SERPAPI_API_KEY`             | Enable the opt-in SerpAPI search box (planned, Phase 6)          | empty (off)              |
 | `ELEVENLABS_API_KEY`          | Enable cloud read-aloud (planned, not in the MVP backend yet)    | empty (off)              |
 
 ## Privacy
 
 - Your feeds, stars and labels stay on your machine in a local SQLite file.
 - Article text goes only to your local model. It is never sent to a cloud service.
-- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, local variables or default PII. ElevenLabs stays off unless you set its key, and then only the short script you are about to hear is sent.
+- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, headers, cookies, query strings, local variables or default PII. ElevenLabs stays off unless you set its key, and then only the short script you are about to hear is sent. The SerpAPI search box (Phase 6) stays off without a key and sends only the query, never article text or reading history.
 - Without an ElevenLabs key, read-aloud uses a local voice.
 
 ## Monitoring

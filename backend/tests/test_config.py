@@ -8,6 +8,7 @@ from tributary.config import Settings
 def test_settings_have_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("TRIBUTARY_DB_PATH", raising=False)
     monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.delenv("SENTRY_ENABLED", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.app_name == "Tributary"

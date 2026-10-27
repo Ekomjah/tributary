@@ -10,7 +10,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tributary.config import Settings
 from tributary.db import create_engine, create_session_factory, init_db
-from tributary.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _disable_sentry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never send telemetry from tests, even when a local .env has a DSN."""
+    monkeypatch.setenv("SENTRY_ENABLED", "false")
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    monkeypatch.delenv("TRIBUTARY_SENTRY_DSN", raising=False)
 
 
 @pytest.fixture
@@ -48,6 +55,8 @@ def db_session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 @pytest.fixture
 def client(settings: Settings) -> Iterator[TestClient]:
+    from tributary.main import create_app
+
     app = create_app(settings)
     with TestClient(app) as test_client:
         yield test_client

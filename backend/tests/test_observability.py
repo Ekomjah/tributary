@@ -38,12 +38,23 @@ def test_sentry_is_enabled_by_default_when_a_dsn_exists(monkeypatch) -> None:
     assert kwargs["dsn"] == "https://public@example.com/1"
     assert kwargs["release"].startswith("tributary@")
     assert kwargs["environment"] == "development"
-    assert kwargs["send_default_pii"] is False
-    assert kwargs["include_local_variables"] is False
-    assert kwargs["include_source_context"] is False
+    assert kwargs["data_collection"] == {
+        "user_info": False,
+        "cookies": {"mode": "off"},
+        "http_headers": {"request": {"mode": "off"}},
+        "http_bodies": [],
+        "url_query_params": {"mode": "off"},
+        "graphql": {"document": False, "variables": False},
+        "gen_ai": {"inputs": False, "outputs": False},
+        "database_query_data": False,
+        "queues": False,
+        "stack_frame_variables": False,
+        "frame_context_lines": 0,
+    }
     assert kwargs["max_request_body_size"] == "never"
     assert kwargs["traces_sample_rate"] == 0.25
-    assert kwargs["profiles_sample_rate"] == 0.1
+    assert kwargs["profile_session_sample_rate"] == 0.1
+    assert kwargs["profile_lifecycle"] == "trace"
     assert kwargs["enable_logs"] is True
 
     integrations = kwargs["integrations"]
@@ -87,4 +98,4 @@ def test_sentry_sampling_can_be_tuned(monkeypatch) -> None:
 
     assert calls[0]["environment"] == "production"
     assert calls[0]["traces_sample_rate"] == 1.0
-    assert calls[0]["profiles_sample_rate"] == 0.5
+    assert calls[0]["profile_session_sample_rate"] == 0.5
