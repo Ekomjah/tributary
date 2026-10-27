@@ -18,16 +18,16 @@ to override defaults. The CLI is built with Typer; `uv run tributary --help` lis
 every command. Sentry is enabled by default once `SENTRY_DSN` is set; set
 `SENTRY_ENABLED=false` to opt out.
 
-## Current phase
+The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 
-Phase 2 is complete: feed fetching with `httpx` and `feedparser`, conditional GET,
-per-feed error isolation, GUID/link normalization, deduplication, trafilatura
-cleaning for substantial feed HTML, and the `tributary fetch` and
-`tributary refresh` commands.
+## Status
 
-Next: Phase 3 (the box engine and `tributary run`), then the API, reader, AI
-cache, and the opt-in SerpAPI search box (Phase 6). SerpAPI needs no new SDK:
-the box calls its REST endpoint with the existing `httpx` client.
+Feed fetching with `httpx` and `feedparser`, conditional GET, per-feed error
+isolation, GUID/link normalization, deduplication, trafilatura cleaning, the pipe
+engine, the JSON API, and the CLI are in place.
+
+Next: local-model boxes and caching, natural-language search, and the visual
+editor. Search and AI boxes are opt-in; the self-hosted build needs no account.
 
 ## Why a CLI?
 
@@ -35,8 +35,8 @@ The browser is the friendly surface; the CLI is the local control plane. It
 bootstraps the database, subscribes to feeds, refreshes them, runs a pipe file,
 exports training data, and starts the server without needing the frontend. That
 makes unattended refreshes possible with cron or a systemd timer, keeps scripts
-and tests honest, and gives the hosted editor the same engine the CLI uses. The
-CLI and API call the same service layer, so there is one implementation to debug.
+and tests honest, and gives the API the same engine the CLI uses. The CLI and API
+call the same service layer, so there is one implementation to debug.
 
 ## Commands
 
@@ -45,6 +45,7 @@ uv run tributary --help
 uv run tributary init-db
 uv run tributary fetch https://hnrss.org/frontpage
 uv run tributary refresh
+uv run tributary run ../pipes/example.json
 uv run tributary serve
 uv run pytest
 uv run ruff check .
@@ -61,7 +62,7 @@ src/tributary/
   main.py        FastAPI app factory
   observability.py  Sentry errors, traces, profiles, logs and metrics
   cli.py         Typer-based tributary command
-  api/           route modules (added in Phase 4)
+  api/           feeds, items, labels, pipes and runs routes
   services/      feeds.py handles fetching, parsing and deduplication
-  boxes/         pipe boxes (Phase 3)
+  boxes/         pipe specification, plain boxes and the runner
 ```
