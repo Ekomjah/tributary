@@ -11,7 +11,10 @@ import typer
 from . import __version__
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
+from .observability import init_sentry
 from .services import feeds
+
+_SENTRY_READY = False
 
 app = typer.Typer(
     name="tributary",
@@ -28,7 +31,11 @@ def _settings_with_db_path(settings: Settings, db_path: Path | None) -> Settings
 
 
 def _load_settings(db_path: Path | None = None) -> Settings:
+    global _SENTRY_READY
     settings = get_settings()
+    if not _SENTRY_READY:
+        init_sentry(settings)
+        _SENTRY_READY = True
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(levelname)s %(name)s: %(message)s",
