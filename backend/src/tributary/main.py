@@ -9,11 +9,13 @@ from sqlalchemy import text
 
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
+from .observability import init_sentry
 from .schemas import HealthOut
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
+    init_sentry(resolved_settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

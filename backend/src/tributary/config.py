@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default="INFO",
         validation_alias=AliasChoices("TRIBUTARY_LOG_LEVEL", "LOG_LEVEL"),
     )
+    sentry_dsn: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SENTRY_DSN", "TRIBUTARY_SENTRY_DSN"),
+    )
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

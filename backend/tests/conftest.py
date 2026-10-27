@@ -17,6 +17,8 @@ from tributary.main import create_app
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     monkeypatch.setenv("TRIBUTARY_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    monkeypatch.delenv("TRIBUTARY_SENTRY_DSN", raising=False)
     return Settings(_env_file=None)
 
 

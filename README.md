@@ -63,7 +63,7 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [AI boxes] -> [Sort] -> reader / spok
                                     Ollama (base or tuned model)
 ```
 
-- **Engine:** Python, FastAPI, feedparser, SQLAlchemy, SQLite.
+- **Engine:** Python, FastAPI, feedparser, trafilatura, SQLAlchemy, SQLite.
 - **Editor and reader:** Next.js with React Flow, exported as static files and served by the engine, so one process runs everything.
 - **Model:** `gemma3:1b` by default. A tuned model trained on Tinker can be swapped in with an environment variable.
 - **Results are cached** per item and per box, so only new items hit the model.
@@ -88,7 +88,7 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 | `TRIBUTARY_DB_PATH` | SQLite database file, relative to the repo root or absolute | `tributary.db` |
 | `OLLAMA_MODEL` | Model used by the AI boxes | `gemma3:1b` |
 | `OLLAMA_HOST` | Ollama address | `http://localhost:11434` |
-| `SENTRY_DSN` | Enable monitoring (planned, not in the MVP backend yet) | empty (off) |
+| `SENTRY_DSN` | Enable Sentry error monitoring (opt-in) | empty (off) |
 | `ELEVENLABS_API_KEY` | Enable cloud read-aloud (planned, not in the MVP backend yet) | empty (off) |
 
 ## Privacy

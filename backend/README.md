@@ -14,7 +14,8 @@ uv run tributary serve
 
 The API is at <http://127.0.0.1:8000>, with interactive docs at
 <http://127.0.0.1:8000/docs>. Copy the repository-level `.env.example` to `.env`
-to override defaults.
+to override defaults. The CLI is built with Typer; `uv run tributary --help` lists
+every command. Sentry error monitoring stays off unless `SENTRY_DSN` is set.
 
 ## Current phase
 
@@ -43,7 +44,8 @@ src/tributary/
   models.py      Feed, Item, Label, Pipe, Run, BoxCache
   schemas.py     Pydantic request/response models
   main.py        FastAPI app factory
-  cli.py         tributary command
+  observability.py  opt-in Sentry initialization
+  cli.py         Typer-based tributary command
   api/           route modules (added in Phase 4)
   services/      feed fetching and pipe execution (Phases 2-5)
   boxes/         pipe boxes (Phase 3)
