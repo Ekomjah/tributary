@@ -1,5 +1,7 @@
 # Tributary
 
+![Tributary Cover Picture](./tributary.jpeg)
+
 **A visual pipe builder for your feeds, with a local model as one of the boxes.**
 
 Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to mash feeds together) and Google Reader (a calm reader with unread, stars and labels). Here the boxes can be small local-model steps such as "summarize" or "filter by meaning", and everything runs on your own machine.
@@ -45,7 +47,10 @@ Or with Docker: `docker compose up`.
 {
   "name": "Dependency releases, one line each",
   "steps": [
-    { "box": "fetch", "urls": ["https://github.com/fastapi/fastapi/releases.atom"] },
+    {
+      "box": "fetch",
+      "urls": ["https://github.com/fastapi/fastapi/releases.atom"]
+    },
     { "box": "dedupe" },
     { "box": "summarize", "style": "one line" },
     { "box": "sort", "by": "date", "order": "desc" }
@@ -72,10 +77,10 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [AI boxes] -> [Sort] -> reader / spok
 
 The "Filter by meaning" and "Why you'd care" boxes can use a small open model tuned on your own stars and skips.
 
-| Model | Held-out accuracy | Precision on "keep" | Seconds per item |
-| --- | --- | --- | --- |
-| Base `gemma3:1b` | TODO | TODO | TODO |
-| Tuned | TODO | TODO | TODO |
+| Model            | Held-out accuracy | Precision on "keep" | Seconds per item |
+| ---------------- | ----------------- | ------------------- | ---------------- |
+| Base `gemma3:1b` | TODO              | TODO                | TODO             |
+| Tuned            | TODO              | TODO                | TODO             |
 
 Training notes and the export steps (adapter, merge, GGUF, Ollama) are in `docs/finetune.md`.
 
