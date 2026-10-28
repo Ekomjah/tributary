@@ -8,7 +8,7 @@ FRONTEND_DIR := frontend
 .PHONY: help setup setup-api setup-client db-init \
 	dev dev-api dev-client \
 	test-api lint-api format-api check-api \
-	lint-client typecheck-client build-client check-client \
+	lint-client typecheck-client test-client build-client check-client \
 	ci clean
 
 help: ## Show available targets
@@ -52,10 +52,13 @@ lint-client: ## Lint the frontend with ESLint
 typecheck-client: ## Type-check the frontend with tsc
 	cd $(FRONTEND_DIR) && pnpm exec tsc --noEmit
 
+test-client: ## Run the frontend tests with Vitest
+	cd $(FRONTEND_DIR) && pnpm test
+
 build-client: ## Build the frontend for production
 	cd $(FRONTEND_DIR) && pnpm build
 
-check-client: lint-client build-client ## Lint and build the frontend
+check-client: lint-client test-client build-client ## Lint, test and build the frontend
 
 ci: check-api check-client ## Run everything CI runs
 
