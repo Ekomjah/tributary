@@ -51,8 +51,18 @@ class LimitStep(StrictModel):
     count: int = Field(default=10, ge=1, le=500)
 
 
+class FullTextStep(StrictModel):
+    box: Literal["fulltext"]
+
+
 PipeStep = Annotated[
-    FetchStep | MergeStep | DedupeStep | FilterStep | SortStep | LimitStep,
+    FetchStep
+    | MergeStep
+    | DedupeStep
+    | FilterStep
+    | SortStep
+    | LimitStep
+    | FullTextStep,
     Field(discriminator="box"),
 ]
 

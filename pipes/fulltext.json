@@ -1,0 +1,9 @@
+{
+  "name": "Front page, in full",
+  "steps": [
+    { "box": "fetch", "urls": ["https://hnrss.org/frontpage"] },
+    { "box": "sort", "by": "published", "order": "desc" },
+    { "box": "limit", "count": 5 },
+    { "box": "fulltext" }
+  ]
+}

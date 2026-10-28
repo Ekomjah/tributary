@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from ..models import Item
 from ..schemas import ItemOut
-from ..services import feeds
+from ..services import articles, feeds
 from .base import BoxError, RunContext
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ __all__ = [
     "DedupeBox",
     "FetchBox",
     "FilterBox",
+    "FullTextBox",
     "LimitBox",
     "MergeBox",
     "SortBox",
@@ -172,3 +173,33 @@ class LimitBox:
 
     def run(self, items: list[ItemOut], context: RunContext) -> list[ItemOut]:
         return items[: self.count]
+
+
+class FullTextBox:
+    """Replace each item's text with the best full text available.
+
+    Long feed content is used as-is; otherwise the article page is fetched
+    once and cached on the item, exactly like opening it in the reader.
+    """
+
+    box = "fulltext"
+
+    def run(self, items: list[ItemOut], context: RunContext) -> list[ItemOut]:
+        enriched: list[ItemOut] = []
+
+        for item in items:
+            row = context.session.get(Item, item.id)
+            if row is None:
+                enriched.append(item)
+                continue
+
+            articles.fetch_article(
+                context.session,
+                row,
+                settings=context.settings,
+                client=context.client,
+            )
+            context.session.flush()
+            enriched.append(ItemOut.model_validate(row))
+
+        return enriched

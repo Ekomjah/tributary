@@ -17,9 +17,17 @@ from tributary.boxes import (
     load_pipe_spec,
     run_pipe,
 )
-from tributary.boxes.plain import DedupeBox, FetchBox, FilterBox, LimitBox, MergeBox, SortBox
+from tributary.boxes.plain import (
+    DedupeBox,
+    FetchBox,
+    FilterBox,
+    FullTextBox,
+    LimitBox,
+    MergeBox,
+    SortBox,
+)
 from tributary.config import Settings
-from tributary.models import Item
+from tributary.models import Feed, Item
 from tributary.schemas import ItemOut
 
 RSS = """<?xml version="1.0" encoding="utf-8"?>
@@ -76,6 +84,7 @@ def test_pipe_spec_accepts_the_plain_boxes() -> None:
                 {"box": "filter", "keyword": "python"},
                 {"box": "sort", "by": "published", "order": "desc"},
                 {"box": "limit", "count": 5},
+                {"box": "fulltext"},
             ],
         }
     )
@@ -87,6 +96,7 @@ def test_pipe_spec_accepts_the_plain_boxes() -> None:
         "filter",
         "sort",
         "limit",
+        "fulltext",
     ]
 
 
@@ -208,6 +218,57 @@ def test_fetch_box_stores_and_returns_items(
     assert [item.title for item in result] == ["First post"]
     assert len(context.sources) == 1
     assert db_session.scalar(select(func.count()).select_from(Item)) == 1
+
+
+def test_fulltext_box_stores_article_text(
+    settings: Settings,
+    db_session: Session,
+) -> None:
+    feed = Feed(url="https://example.com/feed.xml", title="Example")
+    db_session.add(feed)
+    db_session.flush()
+    row = Item(
+        feed_id=feed.id,
+        guid="fulltext-1",
+        title="Post",
+        link="https://example.com/post",
+        content="Short feed summary.",
+    )
+    db_session.add(row)
+    db_session.commit()
+    item = ItemOut.model_validate(row)
+
+    paragraph = "A substantial sentence about the article topic. " * 12
+    page = (
+        "<html><body><article>"
+        + "".join(f"<p>{paragraph}</p>" for _ in range(3))
+        + "</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=page.encode(),
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    context = RunContext(
+        session=db_session,
+        settings=settings.model_copy(update={"article_delay_seconds": 0}),
+        client=client,
+    )
+
+    try:
+        result = FullTextBox().run([item], context)
+        db_session.commit()
+    finally:
+        client.close()
+
+    assert len(result) == 1
+    assert result[0].fetch_status == "ok"
+    assert "substantial sentence" in (result[0].content_full or "")
+    assert row.fetch_status == "ok"
 
 
 def test_run_pipe_applies_steps_in_order(

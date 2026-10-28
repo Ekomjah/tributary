@@ -7,11 +7,20 @@ import sentry_sdk
 
 from ..schemas import ItemOut
 from .base import Box, RunContext
-from .plain import DedupeBox, FetchBox, FilterBox, LimitBox, MergeBox, SortBox
+from .plain import (
+    DedupeBox,
+    FetchBox,
+    FilterBox,
+    FullTextBox,
+    LimitBox,
+    MergeBox,
+    SortBox,
+)
 from .spec import (
     DedupeStep,
     FetchStep,
     FilterStep,
+    FullTextStep,
     LimitStep,
     MergeStep,
     PipeSpec,
@@ -37,7 +46,15 @@ class PipeRunResult:
     steps: list[BoxRun] = field(default_factory=list)
 
 
-def _build_box(step: FetchStep | MergeStep | DedupeStep | FilterStep | SortStep | LimitStep) -> Box:
+def _build_box(
+    step: FetchStep
+    | MergeStep
+    | DedupeStep
+    | FilterStep
+    | SortStep
+    | LimitStep
+    | FullTextStep,
+) -> Box:
     if isinstance(step, FetchStep):
         return FetchBox(step.urls)
     if isinstance(step, MergeStep):
@@ -48,6 +65,8 @@ def _build_box(step: FetchStep | MergeStep | DedupeStep | FilterStep | SortStep 
         return FilterBox(step.keyword, list(step.fields))
     if isinstance(step, SortStep):
         return SortBox(step.by, step.order)
+    if isinstance(step, FullTextStep):
+        return FullTextBox()
     return LimitBox(step.count)
 
 
