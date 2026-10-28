@@ -70,3 +70,128 @@ export interface FeedRefreshResult {
 }
 
 export type ItemView = "unread" | "all" | "starred";
+
+export type SearchEngine = "google_news" | "google";
+export type SearchFreshness = "day" | "week" | "month" | "year";
+
+export interface FetchStep {
+  box: "fetch";
+  urls: string[];
+}
+
+export interface SearchStep {
+  box: "search";
+  query: string;
+  engine?: SearchEngine;
+  gl?: string;
+  hl?: string;
+  freshness?: SearchFreshness | null;
+  max_results?: number;
+  refine?: boolean;
+}
+
+export interface MergeStep {
+  box: "merge";
+}
+
+export interface DedupeStep {
+  box: "dedupe";
+  by?: "link" | "guid" | "title";
+}
+
+export interface FilterStep {
+  box: "filter";
+  keyword: string;
+  fields?: Array<"title" | "content" | "link">;
+}
+
+export interface SortStep {
+  box: "sort";
+  by?: "published" | "fetched_at" | "title";
+  order?: "asc" | "desc";
+}
+
+export interface LimitStep {
+  box: "limit";
+  count?: number;
+}
+
+export interface FullTextStep {
+  box: "fulltext";
+}
+
+export interface SummarizeStep {
+  box: "summarize";
+}
+
+export interface MeaningStep {
+  box: "meaning";
+  criterion: string;
+}
+
+export interface WhyCareStep {
+  box: "whycare";
+}
+
+export type PipeStep =
+  | FetchStep
+  | SearchStep
+  | MergeStep
+  | DedupeStep
+  | FilterStep
+  | SortStep
+  | LimitStep
+  | FullTextStep
+  | SummarizeStep
+  | MeaningStep
+  | WhyCareStep;
+
+export interface PipeSpec {
+  name: string;
+  steps: PipeStep[];
+}
+
+export interface Pipe {
+  id: number;
+  name: string;
+  spec_json: PipeSpec;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoxRun {
+  box: string;
+  seconds: number;
+  items_in: number;
+  items_out: number;
+}
+
+export interface PipeRunRecord {
+  id: number;
+  pipe_id: number;
+  started: string;
+  seconds: number | null;
+  status: "running" | "success" | "error";
+  error: string | null;
+  result_count: number;
+}
+
+export interface PipeRun {
+  run: PipeRunRecord;
+  items: Item[];
+  steps: BoxRun[];
+}
+
+export interface SearchRefinement {
+  spec: {
+    q: string;
+    engine: SearchEngine;
+    gl: string;
+    hl: string;
+    freshness: SearchFreshness | null;
+    max_results: number;
+  };
+  fallback: boolean;
+  model: string;
+  seconds: number;
+}

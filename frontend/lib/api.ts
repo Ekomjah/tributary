@@ -8,6 +8,10 @@ import type {
   ItemPage,
   ItemUpdate,
   Label,
+  Pipe,
+  PipeRun,
+  PipeSpec,
+  SearchRefinement,
 } from "./types";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
@@ -196,6 +200,55 @@ export const api = {
     return request<void>({
       url: `/api/items/${itemId}/labels/${labelId}`,
       method: "DELETE",
+    });
+  },
+
+  listPipes(signal?: AbortSignal): Promise<Pipe[]> {
+    return request<Pipe[]>({ url: "/api/pipes", signal });
+  },
+
+  getPipe(pipeId: number, signal?: AbortSignal): Promise<Pipe> {
+    return request<Pipe>({ url: `/api/pipes/${pipeId}`, signal });
+  },
+
+  createPipe(name: string, spec: PipeSpec): Promise<Pipe> {
+    return request<Pipe>({
+      url: "/api/pipes",
+      method: "POST",
+      data: { name, spec_json: spec },
+    });
+  },
+
+  updatePipe(
+    pipeId: number,
+    update: { name?: string; spec_json?: PipeSpec },
+  ): Promise<Pipe> {
+    return request<Pipe>({
+      url: `/api/pipes/${pipeId}`,
+      method: "PATCH",
+      data: update,
+    });
+  },
+
+  deletePipe(pipeId: number): Promise<void> {
+    return request<void>({
+      url: `/api/pipes/${pipeId}`,
+      method: "DELETE",
+    });
+  },
+
+  runPipe(pipeId: number): Promise<PipeRun> {
+    return request<PipeRun>({
+      url: `/api/pipes/${pipeId}/run`,
+      method: "POST",
+    });
+  },
+
+  refineSearch(query: string): Promise<SearchRefinement> {
+    return request<SearchRefinement>({
+      url: "/api/search/refine",
+      method: "POST",
+      data: { query },
     });
   },
 };
