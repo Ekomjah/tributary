@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from .api import feeds, items, labels, pipes, runs, search_source
+from .api import feeds, items, labels, pipes, refine, runs, search_source
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
 from .observability import init_sentry
@@ -71,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         items.router,
         labels.router,
         pipes.router,
+        refine.router,
         runs.router,
         search_source.router,
     ):
