@@ -24,10 +24,11 @@ The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 
 Feed fetching with `httpx` and `feedparser`, conditional GET, per-feed error
 isolation, GUID/link normalization, deduplication, trafilatura cleaning, the pipe
-engine, the JSON API, and the CLI are in place.
+engine, local-model boxes with caching, SerpAPI search with natural-language
+refinement, the JSON API, and the CLI are in place. The visual pipe editor lives
+in the Next.js app at `/pipes`.
 
-Next: local-model boxes and caching, natural-language search, and the visual
-editor. Search and AI boxes are opt-in; the self-hosted build needs no account.
+Search and AI boxes are opt-in; the self-hosted build needs no account.
 
 ## Why a CLI?
 
@@ -46,6 +47,7 @@ uv run tributary init-db
 uv run tributary fetch https://hnrss.org/frontpage
 uv run tributary refresh
 uv run tributary run ../pipes/example.json
+uv run tributary search "AI regulation this week"
 uv run tributary serve
 uv run pytest
 uv run ruff check .
@@ -57,12 +59,12 @@ uv run ruff check .
 src/tributary/
   config.py      settings and repository paths
   db.py          engine, sessions, SQLite pragmas, UTC timestamp type
-  models.py      Feed, Item, Label, Pipe, Run, BoxCache
+  models.py      Feed, Item, Label, Pipe, Run, BoxCache, SearchCache
   schemas.py     Pydantic request/response models
   main.py        FastAPI app factory
   observability.py  Sentry errors, traces, profiles, logs and metrics
   cli.py         Typer-based tributary command
-  api/           feeds, items, labels, pipes and runs routes
-  services/      feeds.py handles fetching, parsing and deduplication
-  boxes/         pipe specification, plain boxes and the runner
+  api/           feeds, items, labels, pipes, runs, search and refine routes
+  services/      feeds, search, refine, model and cache services
+  boxes/         pipe specification, plain and AI boxes, search and the runner
 ```

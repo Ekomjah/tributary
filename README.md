@@ -6,17 +6,18 @@
 
 Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to mash feeds together) and Google Reader (a calm reader with unread, stars and labels). The boxes are small, composable steps, and the app runs on your own machine.
 
-> Status: the self-hosted build is in progress. Feed fetching, full-text extraction, the pipe engine, local-model boxes, SerpAPI search, the JSON API and a keyboard-first reader work today. A search form in the reader, read-aloud and the visual editor are next.
+> Status: the self-hosted build is in progress. Feed fetching, full-text extraction, the pipe engine, local-model boxes, SerpAPI search with natural-language refinement, the visual pipe editor, the JSON API and a keyboard-first reader work today. A search form in the reader and read-aloud are next.
 
 ## What it does
 
-- **Pipes.** Chain Fetch, Search, Merge, Dedupe, Filter, Sort, Limit and Full text boxes. A pipe is a small JSON file you can save, share and edit by hand.
+- **Pipes.** Chain Fetch, Search, Merge, Dedupe, Filter, Sort, Limit and Full text boxes. Build a pipe by dragging boxes at `/pipes`, or save and share it as a small JSON file you can edit by hand.
 - **Reader.** Unread/read, starred, labels and filters, with keyboard shortcuts (`j`/`k` to move, `s` to star, `m` to mark read).
 - **Full text.** When a feed sends only an excerpt, Tributary fetches the article once, cleans it with trafilatura, and keeps it for offline reading.
 - **Local model.** Summarize each item, filter by meaning ("keep only items about databases, drop hype") and explain why a story might matter, all through Ollama on your machine.
-- **Search.** Ask SerpAPI for news or web results and keep them as a search feed in the sidebar. It is off unless you add a key.
+- **Search.** Ask for news or web results in plain language. The local model rewrites the request into search parameters, SerpAPI runs it, and the results become a search feed in the sidebar. It is off unless you add a key.
+- **Visual editor.** Drag boxes onto a canvas, wire them into a chain, preview the refined search query, then save and run the pipe without leaving the browser.
 - **Local first.** Feeds, stars and labels live in one SQLite file. The API and reader run on your machine. No accounts.
-- **Next:** a search form in the reader, read-aloud, and a visual pipe editor.
+- **Next:** a search form in the reader and read-aloud.
 
 ## Quick start
 
@@ -66,6 +67,10 @@ uv run tributary search "AI regulation this week"
 uv run tributary run ../pipes/search.json
 ```
 
+The local model refines the request first and the command shows what will be sent. Use `--no-refine` to send your words as-is. If Ollama is unavailable, search falls back to the raw query automatically.
+
+The visual editor lives at <http://localhost:3000/pipes>. The API must be running; save a pipe before running it, so the browser and the CLI execute the same stored spec.
+
 `doctor` checks the database, Ollama, SerpAPI and Sentry. `tributary export --out training.jsonl` writes your Keep/Drop labels as JSONL for fine-tuning.
 
 ## Example pipe
@@ -99,9 +104,9 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [Filter] -> [Sort] -> [Limit] -> read
 
 - **Engine:** Python, FastAPI, feedparser, trafilatura, SQLAlchemy, SQLite.
 - **Reader:** Next.js with React. The API and reader run as two local processes during development.
-- **Pipes:** JSON files. `tributary run` executes one from the CLI; the API can save and run them too.
+- **Pipes:** JSON files. `tributary run` executes one from the CLI; the API saves and runs them, and the React Flow editor at `/pipes` writes the same spec.
 - **AI boxes:** Summarize, Filter by meaning and Why you'd care call Ollama on the same machine and cache each answer in SQLite.
-- **Search:** the Search box and `tributary search` call SerpAPI, then store the results under a virtual `search://` feed. Those feeds appear under **Searches** in the sidebar and stay out of All items, Unread and Starred. A search is cached for six hours.
+- **Search:** the Search box and `tributary search` ask Ollama to refine the request, call SerpAPI, then store the results under a virtual `search://` feed. Those feeds appear under **Searches** in the sidebar and stay out of All items, Unread and Starred. A search is cached for six hours.
 
 ## Configuration
 
@@ -131,7 +136,7 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 - When a feed only sends an excerpt, Tributary fetches the article page directly from the publisher, from your machine, the first time you open that item. The request carries Tributary's User-Agent and no account, cookies or reading history. The page is cleaned to text and cached in your local database.
 - Article text is not sent to a cloud service. The AI boxes use the local Ollama instance, and only extracted article text is sent to it.
 - Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, headers, cookies, query strings, local variables or default PII.
-- The Search box is off unless `SERPAPI_API_KEY` is configured. When it runs, it sends the query, engine, locale and freshness to SerpAPI, never article text or reading history. Results are stored in your local database and cached for six hours.
+- The Search box is off unless `SERPAPI_API_KEY` is configured. When it runs, your request is refined by the local Ollama instance, then only the refined query, engine, locale and freshness go to SerpAPI, never article text or reading history. Results are stored in your local database and cached for six hours.
 
 ## Monitoring
 
@@ -145,7 +150,7 @@ A read-only cloud demo is a future deployment profile, not part of this build. I
 
 ## Limitations
 
-- A search form in the reader, read-aloud and the visual editor are not implemented yet. Search works through the API, the CLI and the Search pipe box.
+- A search form in the reader and read-aloud are not implemented yet. Search works through the API, the CLI, the Search pipe box and the editor's query preview.
 - The reader and API run as separate local processes during development.
 - Single user, no accounts, by design for the self-hosted build.
 
@@ -160,7 +165,8 @@ make dev-api     # API only, at http://127.0.0.1:8000
 make dev-client  # reader only, at http://localhost:3000
 make test-api    # backend tests
 make check-api   # backend lint and tests
-make check-client # frontend lint and production build
+make test-client # frontend Vitest suite
+make check-client # frontend lint, tests and production build
 make ci          # everything CI runs
 ```
 
@@ -174,6 +180,7 @@ uv run ruff check .
 
 cd ../frontend
 pnpm lint
+pnpm test
 pnpm build
 ```
 
