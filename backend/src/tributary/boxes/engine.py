@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import sentry_sdk
 
 from ..schemas import ItemOut
+from .ai import MeaningFilterBox, SummarizeBox, WhyCareBox
 from .base import Box, RunContext
 from .plain import (
     DedupeBox,
@@ -22,9 +23,12 @@ from .spec import (
     FilterStep,
     FullTextStep,
     LimitStep,
+    MeaningStep,
     MergeStep,
     PipeSpec,
     SortStep,
+    SummarizeStep,
+    WhyCareStep,
 )
 
 __all__ = ["BoxRun", "PipeRunResult", "run_pipe"]
@@ -53,7 +57,10 @@ def _build_box(
     | FilterStep
     | SortStep
     | LimitStep
-    | FullTextStep,
+    | FullTextStep
+    | SummarizeStep
+    | MeaningStep
+    | WhyCareStep,
 ) -> Box:
     if isinstance(step, FetchStep):
         return FetchBox(step.urls)
@@ -67,6 +74,12 @@ def _build_box(
         return SortBox(step.by, step.order)
     if isinstance(step, FullTextStep):
         return FullTextBox()
+    if isinstance(step, SummarizeStep):
+        return SummarizeBox()
+    if isinstance(step, MeaningStep):
+        return MeaningFilterBox(step.criterion)
+    if isinstance(step, WhyCareStep):
+        return WhyCareBox()
     return LimitBox(step.count)
 
 

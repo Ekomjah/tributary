@@ -11,7 +11,7 @@ import {
 
 import LabelMenu from "@/components/label-menu";
 import { Button } from "@/components/ui/button";
-import { formatRelative, summaryPreview } from "@/lib/text";
+import { excerpt, formatRelative } from "@/lib/text";
 import type { Item, ItemView, Label } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -224,9 +224,7 @@ export default function ArticleList({
       ) : (
         <div className="divide-y divide-divider">
           {items.map((item) => {
-            const summary =
-              summaryPreview(item.content, 30) ||
-              "No preview from this feed.";
+            const preview = item.summary ?? excerpt(item.content, 190);
             const selected = selectedId === item.id;
 
             return (
@@ -332,8 +330,14 @@ export default function ArticleList({
                 </div>
 
                 <p className="mt-1 truncate text-[12px] leading-5 text-muted">
-                  <span className="font-bold text-ink">Summary:</span>{" "}
-                  {summary}
+                  {item.summary ? (
+                    <>
+                      <span className="font-bold text-ink">Summary:</span>{" "}
+                      {preview}
+                    </>
+                  ) : (
+                    preview || "No preview from this feed."
+                  )}
                 </p>
 
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">

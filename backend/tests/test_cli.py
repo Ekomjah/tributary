@@ -7,6 +7,9 @@ import httpx
 from typer.testing import CliRunner
 
 from tributary.cli import app
+from tributary.config import Settings
+from tributary.db import create_engine, create_session_factory, init_db, session_scope
+from tributary.models import Feed, Item
 from tributary.services import feeds
 
 runner = CliRunner()
@@ -103,11 +106,106 @@ def test_refresh_without_feeds_succeeds(tmp_path: Path) -> None:
     assert "No feeds yet" in result.output
 
 
-def test_export_is_not_implemented() -> None:
-    result = runner.invoke(app, ["export"])
+def seed_labelled_item(db_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TRIBUTARY_DB_PATH", str(db_path))
+    settings = Settings(_env_file=None)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            feed = Feed(url="https://example.com/feed.xml", title="Example")
+            session.add(feed)
+            session.flush()
+            session.add(
+                Item(
+                    feed_id=feed.id,
+                    guid="keep-1",
+                    title="Keep this",
+                    link="https://example.com/keep",
+                    content="Short.",
+                    content_full="The full article text.",
+                    decision="keep",
+                    starred=True,
+                )
+            )
+            session.add(
+                Item(
+                    feed_id=feed.id,
+                    guid="unlabelled-1",
+                    title="Not labelled yet",
+                    link="https://example.com/unlabelled",
+                    content="Another body.",
+                )
+            )
+    finally:
+        engine.dispose()
 
-    assert result.exit_code == 2
-    assert "not implemented yet" in result.output
+
+def test_export_writes_labelled_items(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+    out_path = tmp_path / "training.jsonl"
+    seed_labelled_item(db_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        ["export", "--db", str(db_path), "--out", str(out_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Wrote 1 item(s)" in result.output
+    record = json.loads(out_path.read_text(encoding="utf-8").strip())
+    assert record["label"] == "keep"
+    assert record["starred"] is True
+    assert record["text"] == "The full article text."
+    assert record["feed"] == "Example"
+
+
+def test_export_skips_unlabelled_items_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "cli.db"
+    seed_labelled_item(db_path, monkeypatch)
+
+    result = runner.invoke(app, ["export", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["title"] == "Keep this"
+
+    labelled_only = runner.invoke(app, ["export", "--db", str(db_path), "--all"])
+    assert labelled_only.exit_code == 0
+    assert len(labelled_only.output.strip().splitlines()) == 2
+
+
+def test_doctor_reports_a_healthy_setup(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SENTRY_ENABLED", "false")
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (True, "reachable at test", ["gemma3:1b"]),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "OK    database" in result.output
+    assert "OK    ollama" in result.output
+
+
+def test_doctor_warns_when_the_model_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SENTRY_ENABLED", "false")
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (True, "reachable at test", ["another-model:1b"]),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "ollama pull gemma3:1b" in result.output
 
 
 def test_run_executes_a_pipe_file(tmp_path: Path, monkeypatch) -> None:

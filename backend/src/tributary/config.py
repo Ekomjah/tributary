@@ -36,6 +36,11 @@ class Settings(BaseSettings):
         default="http://localhost:11434",
         validation_alias=AliasChoices("OLLAMA_HOST", "TRIBUTARY_OLLAMA_HOST"),
     )
+    ollama_timeout: float = Field(
+        default=120.0,
+        gt=0,
+        validation_alias=AliasChoices("OLLAMA_TIMEOUT", "TRIBUTARY_OLLAMA_TIMEOUT"),
+    )
     host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("TRIBUTARY_HOST", "HOST"),

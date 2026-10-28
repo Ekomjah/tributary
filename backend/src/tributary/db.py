@@ -79,6 +79,8 @@ _ITEM_COLUMNS: dict[str, str] = {
     "content_full": "TEXT",
     "content_fetched_at": "DATETIME",
     "fetch_status": "VARCHAR(16)",
+    "summary": "TEXT",
+    "why_care": "TEXT",
 }
 
 

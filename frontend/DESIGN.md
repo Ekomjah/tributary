@@ -107,6 +107,8 @@ The reading view is one readable column (max 780px, 68ch for the body), not a ca
 - **Meta line:** the feed name as a bold `--blue` link with its unread count in parentheses, then the full date and an estimated reading time in `--text-3`. Label chips sit on the same line.
 - **Actions:** Star, Mark read/unread, Add label and an **Open original** link. These stay visible (no hover-only actions in the reading view). **Open original** is always shown, including when the article body is missing or blocked.
 - **Body:** 15px `--text`, 1.75 line height, paragraphs separated by 16px. Show extracted full text when present; otherwise fall back to the feed's excerpt.
+- **AI summary:** when the item has one, show it above the body in a light blue box with a 3px `--blue` left border, prefixed with bold `Summary:`. In the list, the same bold prefix marks a real summary; without one, the excerpt stands alone.
+- **Why you’d care:** a quiet `--chrome` box below the body with a small sparkle, the uppercase heading `Why you’d care`, and one sentence.
 - **Fetching:** while full text is being fetched, keep the excerpt visible and add an inline spinner with `Fetching the full text…` at the end of the body.
 - **Unavailable:** a 1px `--border` box in `--chrome` with a warning triangle, the bold line **Full text unavailable**, one plain sentence (`paywalled or blocked`, `no readable text`, `could not be reached`) and a `Read it at the source` link.
 - **Empty:** when the feed sent no body and no fetch has run, show `This feed didn’t send the article body.` and the source link in the same box.

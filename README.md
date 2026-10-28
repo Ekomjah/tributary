@@ -6,19 +6,20 @@
 
 Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to mash feeds together) and Google Reader (a calm reader with unread, stars and labels). The boxes are small, composable steps, and the app runs on your own machine.
 
-> Status: the self-hosted build is in progress. Feed fetching, the pipe engine, the JSON API and a keyboard-first reader work today. Local-model boxes, natural-language search, read-aloud and the visual editor are next.
+> Status: the self-hosted build is in progress. Feed fetching, full-text extraction, the pipe engine, local-model boxes, the JSON API and a keyboard-first reader work today. Natural-language search, read-aloud and the visual editor are next.
 
 ## What it does
 
 - **Pipes.** Chain Fetch, Merge, Dedupe, Filter, Sort and Limit boxes. A pipe is a small JSON file you can save, share and edit by hand.
 - **Reader.** Unread/read, starred, labels and filters, with keyboard shortcuts (`j`/`k` to move, `s` to star, `m` to mark read).
 - **Full text.** When a feed sends only an excerpt, Tributary fetches the article once, cleans it with trafilatura, and keeps it for offline reading.
+- **Local model.** Summarize each item, filter by meaning ("keep only items about databases, drop hype") and explain why a story might matter, all through Ollama on your machine.
 - **Local first.** Feeds, stars and labels live in one SQLite file. The API and reader run on your machine. No accounts.
-- **Next:** local-model boxes for summaries and meaning-based filters, a natural-language search box backed by SerpAPI, read-aloud, and a visual pipe editor.
+- **Next:** a natural-language search box backed by SerpAPI, read-aloud, and a visual pipe editor.
 
 ## Quick start
 
-Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [pnpm](https://pnpm.io/), and [Ollama](https://ollama.com) when the local-model boxes land.
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [pnpm](https://pnpm.io/), and [Ollama](https://ollama.com) for the AI boxes.
 
 ```bash
 git clone https://github.com/Ekomjah/tributary
@@ -47,7 +48,17 @@ Run a pipe without the browser (from `backend/`):
 
 ```bash
 uv run tributary run ../pipes/example.json
+uv run tributary run ../pipes/summarize.json
 ```
+
+The summarize pipe needs Ollama running with the configured model:
+
+```bash
+ollama pull gemma3:1b
+uv run tributary doctor
+```
+
+`doctor` checks the database, Ollama and Sentry. `tributary export --out training.jsonl` writes your Keep/Drop labels as JSONL for fine-tuning.
 
 ## Example pipe
 
@@ -81,7 +92,8 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [Filter] -> [Sort] -> [Limit] -> read
 - **Engine:** Python, FastAPI, feedparser, trafilatura, SQLAlchemy, SQLite.
 - **Reader:** Next.js with React. The API and reader run as two local processes during development.
 - **Pipes:** JSON files. `tributary run` executes one from the CLI; the API can save and run them too.
-- **Search and AI boxes:** opt-in and not implemented yet. They will use SerpAPI and Ollama respectively.
+- **AI boxes:** Summarize, Filter by meaning and Why you'd care call Ollama on the same machine and cache each answer in SQLite.
+- **Search:** opt-in and not implemented yet. It will use SerpAPI.
 
 ## Configuration
 
@@ -90,8 +102,9 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 | Variable                      | Purpose                                                          | Default                  |
 | ----------------------------- | ---------------------------------------------------------------- | ------------------------ |
 | `TRIBUTARY_DB_PATH`           | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
-| `OLLAMA_MODEL`                | Model used by the upcoming AI boxes                              | `gemma3:1b`              |
+| `OLLAMA_MODEL`                | Model used by the AI boxes                                       | `gemma3:1b`              |
 | `OLLAMA_HOST`                 | Ollama address                                                   | `http://localhost:11434` |
+| `OLLAMA_TIMEOUT`              | Seconds before a model call times out                            | `120`                    |
 | `SENTRY_DSN`                  | Sentry project DSN. Monitoring is on by default once this is set | sample in `.env.example` |
 | `SENTRY_ENABLED`              | Set to `false` to opt out of Sentry                              | `true`                   |
 | `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1                            | `0.25`                   |
@@ -119,7 +132,7 @@ A read-only cloud demo is a future deployment profile, not part of this build. I
 
 ## Limitations
 
-- The local-model boxes, natural-language search, read-aloud and visual editor are not implemented yet.
+- The natural-language search box, read-aloud and visual editor are not implemented yet.
 - The reader and API run as separate local processes during development.
 - Single user, no accounts, by design for the self-hosted build.
 

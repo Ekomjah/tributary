@@ -71,6 +71,7 @@ class ItemOut(ORMModel):
     fetched_at: datetime
     labels: list[LabelOut] = Field(default_factory=list)
     summary: str | None = None
+    why_care: str | None = None
 
 
 class ArticleFetchOut(BaseModel):

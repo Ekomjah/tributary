@@ -43,15 +43,6 @@ export function excerpt(value: string, length = 190): string {
   return `${text.slice(0, length).trimEnd()}…`;
 }
 
-/**
- * Placeholder for the local-model summary. Until the Summarize box lands we
- * show the opening characters of the article so the shape of the layout is
- * already in place.
- */
-export function summaryPreview(value: string, length = 30): string {
-  return excerpt(value, length);
-}
-
 export function contentParagraphs(value: string): string[] {
   return htmlToText(value)
     .split(/\n{2,}/)

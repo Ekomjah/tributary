@@ -8,14 +8,17 @@ from typing import Annotated
 
 import sentry_sdk
 import typer
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from . import __version__
 from .boxes import BoxError, PipeSpecError, RunContext, load_pipe_spec
 from .boxes import run_pipe as execute_pipe
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
+from .models import Feed, Item
 from .observability import init_sentry
-from .services import feeds
+from .services import feeds, model
 
 _SENTRY_READY = False
 
@@ -54,9 +57,22 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-def _not_implemented(feature: str) -> None:
-    typer.echo(f"{feature} is not implemented yet.", err=True)
-    raise typer.Exit(code=2)
+def _model_installed(configured: str, installed: list[str]) -> bool:
+    return configured in installed or f"{configured}:latest" in installed
+
+
+def _training_record(item: Item) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "label": item.decision,
+        "starred": item.starred,
+        "title": item.title,
+        "url": item.link,
+        "feed": item.feed.title if item.feed is not None else "",
+        "published": item.published.isoformat() if item.published else None,
+        "labels": [label.name for label in item.labels],
+        "text": item.content_full or item.content,
+    }
 
 
 def _print_fetch_result(result: feeds.FetchResult) -> None:
@@ -248,10 +264,109 @@ def run_pipe_file(
 @app.command("export")
 def export_training(
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", "-o", help="Write JSONL here instead of stdout."),
+    ] = None,
+    include_all: Annotated[
+        bool,
+        typer.Option("--all", help="Include unlabelled items too."),
+    ] = False,
 ) -> None:
-    """Export labelled items as JSONL."""
-    _load_settings(db)
-    _not_implemented("Training export")
+    """Export items as JSONL for fine-tuning."""
+    settings = _load_settings(db)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            stmt = select(Item).options(selectinload(Item.feed)).order_by(Item.id)
+            if not include_all:
+                stmt = stmt.where(Item.decision.is_not(None))
+            records = [_training_record(item) for item in session.scalars(stmt)]
+    finally:
+        engine.dispose()
+
+    if not records:
+        typer.echo(
+            "No labelled items yet. Star or Keep/Drop a few in the reader first.",
+            err=True,
+        )
+        return
+
+    payload = "".join(
+        json.dumps(record, ensure_ascii=False) + "\n" for record in records
+    )
+    if out is None:
+        typer.echo(payload, nl=False)
+        return
+
+    target = out.expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload, encoding="utf-8")
+    typer.echo(f"Wrote {len(records)} item(s) to {target}")
+
+
+@app.command()
+def doctor(
+    db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
+) -> None:
+    """Check the database, Ollama and Sentry setup."""
+    settings = _load_settings(db)
+    failures = 0
+
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            feed_count = session.scalar(select(func.count()).select_from(Feed)) or 0
+            item_count = session.scalar(select(func.count()).select_from(Item)) or 0
+            labelled = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Item)
+                    .where(Item.decision.is_not(None))
+                )
+                or 0
+            )
+        typer.echo(
+            f"OK    database  {settings.db_path} "
+            f"({feed_count} feeds, {item_count} items, {labelled} labelled)"
+        )
+    except Exception as exc:
+        failures += 1
+        typer.echo(
+            f"FAIL  database  {settings.db_path}: {type(exc).__name__}",
+            err=True,
+        )
+    finally:
+        engine.dispose()
+
+    reachable, detail, installed = model.check_ollama(settings)
+    if not reachable:
+        typer.echo(
+            f"WARN  ollama    {detail}; the AI boxes will fail",
+            err=True,
+        )
+    elif _model_installed(settings.ollama_model, installed):
+        typer.echo(f"OK    ollama    {settings.ollama_model} ({detail})")
+    else:
+        typer.echo(
+            f"WARN  ollama    model {settings.ollama_model!r} is not installed; "
+            f"run `ollama pull {settings.ollama_model}`",
+            err=True,
+        )
+
+    if not settings.sentry_enabled:
+        typer.echo("OK    sentry    disabled by SENTRY_ENABLED=false")
+    elif settings.sentry_dsn:
+        typer.echo("OK    sentry    enabled")
+    else:
+        typer.echo("WARN  sentry    enabled but SENTRY_DSN is empty")
+
+    if failures:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

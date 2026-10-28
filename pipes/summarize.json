@@ -1,0 +1,10 @@
+{
+  "name": "Front page, summarized",
+  "steps": [
+    { "box": "fetch", "urls": ["https://hnrss.org/frontpage"] },
+    { "box": "sort", "by": "published", "order": "desc" },
+    { "box": "limit", "count": 5 },
+    { "box": "fulltext" },
+    { "box": "summarize" }
+  ]
+}

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..schemas import ItemOut
+from ..services.model import ModelClient, OllamaModelClient
 
 
 class BoxError(RuntimeError):
@@ -22,6 +23,12 @@ class RunContext:
     settings: Settings
     client: httpx.Client
     sources: list[list[ItemOut]] = field(default_factory=list)
+    model: ModelClient | None = None
+
+    def model_client(self) -> ModelClient:
+        if self.model is None:
+            self.model = OllamaModelClient.from_settings(self.settings)
+        return self.model
 
 
 class Box(Protocol):

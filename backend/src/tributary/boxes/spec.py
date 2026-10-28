@@ -55,6 +55,19 @@ class FullTextStep(StrictModel):
     box: Literal["fulltext"]
 
 
+class SummarizeStep(StrictModel):
+    box: Literal["summarize"]
+
+
+class MeaningStep(StrictModel):
+    box: Literal["meaning"]
+    criterion: str = Field(min_length=1, max_length=500)
+
+
+class WhyCareStep(StrictModel):
+    box: Literal["whycare"]
+
+
 PipeStep = Annotated[
     FetchStep
     | MergeStep
@@ -62,7 +75,10 @@ PipeStep = Annotated[
     | FilterStep
     | SortStep
     | LimitStep
-    | FullTextStep,
+    | FullTextStep
+    | SummarizeStep
+    | MeaningStep
+    | WhyCareStep,
     Field(discriminator="box"),
 ]
 

@@ -71,6 +71,8 @@ class Item(Base):
     content_full: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     fetch_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    why_care: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     decision: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)

@@ -184,6 +184,12 @@ export default function ArticleView({
           )}
         </div>
 
+        {item.summary && (
+          <div className="mt-5 max-w-[68ch] border-l-[3px] border-accent bg-accent-bg px-3 py-2 text-[13px] leading-5 text-ink">
+            <span className="font-bold">Summary:</span> {item.summary}
+          </div>
+        )}
+
         <div className="mt-6 max-w-[68ch] text-[15px] leading-[1.75] text-ink">
           {paragraphs.map((paragraph, index) => (
             <p
@@ -256,6 +262,16 @@ export default function ArticleView({
             </div>
           )}
         </div>
+
+        {item.why_care && (
+          <div className="mt-4 max-w-[68ch] border border-line bg-chrome px-4 py-3 text-[13px] leading-5">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.06em] text-muted">
+              <Sparkles className="size-3.5 text-accent" aria-hidden="true" />
+              Why you’d care
+            </p>
+            <p className="mt-1 text-ink">{item.why_care}</p>
+          </div>
+        )}
 
         <div className="mt-10 border-t border-divider pt-4">
           <div className="flex flex-wrap items-center gap-2">

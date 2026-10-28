@@ -33,6 +33,7 @@ export interface Item {
   fetched_at: string;
   labels: Label[];
   summary: string | null;
+  why_care: string | null;
 }
 
 export interface ArticleFetch {
