@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   Inbox,
   Library,
@@ -7,6 +8,7 @@ import {
   Search,
   Star,
   Tag,
+  Workflow,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
@@ -134,6 +136,21 @@ export default function Sidebar({
             </Row>
           ))}
         </nav>
+
+        <div className="my-2 border-t border-divider" />
+
+        <section aria-labelledby="sidebar-tools">
+          <SectionTitle>
+            <span id="sidebar-tools">Tools</span>
+          </SectionTitle>
+          <Link
+            href="/pipes"
+            className="flex h-7 w-full items-center gap-2 rounded-none border-l-[3px] border-transparent px-2 text-left text-[13px] text-ink hover:bg-[#f0f0f0] hover:no-underline"
+          >
+            <Workflow className="size-4 shrink-0 text-muted" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">Pipes</span>
+          </Link>
+        </section>
 
         <div className="my-2 border-t border-divider" />
 

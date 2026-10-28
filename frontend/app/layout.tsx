@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Arimo, Roboto_Mono } from "next/font/google";
 
 import Providers from "./providers";
+import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 const arimo = Arimo({
