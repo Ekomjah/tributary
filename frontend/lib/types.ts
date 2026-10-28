@@ -15,6 +15,23 @@ export interface Feed {
   created_at: string;
 }
 
+export interface FeedCandidate {
+  url: string;
+  title: string;
+  kind: string;
+}
+
+export interface FeedDiscovery {
+  input_url: string;
+  page_title: string | null;
+  candidates: FeedCandidate[];
+}
+
+export interface FeedAddResult {
+  feed: Feed;
+  result: FeedRefreshResult;
+}
+
 export type FetchStatus = "ok" | "empty" | "blocked" | "error";
 
 export interface Item {
@@ -25,6 +42,7 @@ export interface Item {
   link: string | null;
   published: string | null;
   content: string;
+  content_html: string | null;
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
@@ -40,6 +58,7 @@ export interface Item {
 
 export interface ArticleFetch {
   id: number;
+  content_html: string | null;
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;

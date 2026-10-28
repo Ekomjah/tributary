@@ -60,6 +60,8 @@ export default function ArticleView({
   const paragraphs = contentParagraphs(text);
   const readingTime = readingMinutes(plainText(text));
   const published = item.published ?? item.fetched_at;
+  // Feed HTML is sanitized with nh3 before storage; never inject it raw.
+  const showHtml = item.content_full === null && Boolean(item.content_html);
   const fetchFailed =
     item.content_full === null &&
     item.fetch_status !== null &&
@@ -191,14 +193,21 @@ export default function ArticleView({
         )}
 
         <div className="mt-6 max-w-[68ch] text-[15px] leading-[1.75] text-ink">
-          {paragraphs.map((paragraph, index) => (
-            <p
-              key={`${item.id}-${index}`}
-              className="mb-4 whitespace-pre-line"
-            >
-              {paragraph}
-            </p>
-          ))}
+          {showHtml ? (
+            <div
+              className="article-html"
+              dangerouslySetInnerHTML={{ __html: item.content_html ?? "" }}
+            />
+          ) : (
+            paragraphs.map((paragraph, index) => (
+              <p
+                key={`${item.id}-${index}`}
+                className="mb-4 whitespace-pre-line"
+              >
+                {paragraph}
+              </p>
+            ))
+          )}
 
           {waitingForText && (
             <p
@@ -242,7 +251,7 @@ export default function ArticleView({
             </div>
           )}
 
-          {paragraphs.length === 0 && !waitingForText && !fetchFailed && (
+          {paragraphs.length === 0 && !showHtml && !waitingForText && !fetchFailed && (
             <div className="border border-line bg-chrome px-4 py-3 text-[13px] leading-5 text-muted">
               This feed didn’t send the article body.
               {item.link && (

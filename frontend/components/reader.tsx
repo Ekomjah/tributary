@@ -74,10 +74,6 @@ interface StatusMessage {
   error?: boolean;
 }
 
-function withScheme(value: string): string {
-  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
-}
-
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) {
     return error.message;
@@ -418,12 +414,8 @@ export default function Reader() {
     onError: showError,
   });
 
-  const { mutateAsync: createAndFetchFeed } = useMutation({
-    mutationFn: async (url: string) => {
-      const feed = await api.createFeed(url);
-      const result = await api.refreshFeed(feed.id);
-      return { feed, result };
-    },
+  const { mutateAsync: addFeed } = useMutation({
+    mutationFn: (url: string) => api.createFeed(url),
   });
 
   const { mutateAsync: createLabel } = useMutation({
@@ -538,10 +530,9 @@ export default function Reader() {
   }, [refreshing, runRefresh]);
 
   const submitFeed = useCallback(
-    async (raw: string) => {
-      const url = withScheme(raw.trim());
+    async (url: string) => {
       try {
-        const { feed, result } = await createAndFetchFeed(url);
+        const { feed, result } = await addFeed(url);
 
         if (result.error) {
           showStatus(
@@ -571,7 +562,7 @@ export default function Reader() {
         return message;
       }
     },
-    [createAndFetchFeed, queryClient, showStatus],
+    [addFeed, queryClient, showStatus],
   );
 
   const submitLabel = useCallback(
@@ -1036,7 +1027,8 @@ export default function Reader() {
       <AddFeedDialog
         open={addFeedOpen}
         onOpenChange={setAddFeedOpen}
-        onSubmit={submitFeed}
+        onDiscover={(url) => api.discoverFeeds(url)}
+        onAdd={submitFeed}
       />
       <AddLabelDialog
         open={addLabelOpen}

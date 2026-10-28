@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import html
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 import sentry_sdk
@@ -17,20 +15,23 @@ from ..config import Settings
 from ..db import utcnow
 from ..models import Item
 from ..schemas import FetchStatus
+from .urls import UnsafeUrlError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ArticleFetchError",
     "ArticleResult",
     "fetch_article",
     "make_client",
 ]
 
-_TAG = re.compile(r"<[^>]+>")
 _DOMAIN_LOCKS: dict[str, threading.Lock] = {}
 _DOMAIN_LAST: dict[str, float] = {}
 _DOMAIN_REGISTRY_LOCK = threading.Lock()
 
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
 
@@ -55,7 +56,7 @@ def make_client(settings: Settings) -> httpx.Client:
 
     return httpx.Client(
         timeout=settings.article_timeout,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={
             "User-Agent": settings.user_agent,
             "Accept": _HTML_ACCEPT,
@@ -73,35 +74,35 @@ def fetch_article(
 ) -> ArticleResult:
     """Populate ``item.content_full`` at most once, unless forced.
 
-    The feed's own text wins when it is long enough. Otherwise the article page
-    is fetched politely and cleaned with trafilatura. Every outcome is stored on
-    the item so a paywall or a broken page is not retried on every refresh.
+    Full text that came from a real ``content:encoded`` or Atom ``<content>``
+    element is reused without a network request. Everything else, including a
+    long ``<description>``, is fetched politely and cleaned with trafilatura.
+    Every outcome is stored on the item so a paywall or a broken page is not
+    retried on every refresh.
     """
 
     if not force and item.fetch_status is not None:
+        text = item.content_full.strip() if item.content_full else None
+        if text != item.content_full:
+            item.content_full = text
+            session.flush()
         return ArticleResult(
             status=item.fetch_status,  # type: ignore[arg-type]
-            text=item.content_full,
+            text=text,
             fetched=False,
         )
 
     if not force and item.content_full:
+        text = item.content_full.strip()
+        item.content_full = text
         item.fetch_status = "ok"
         if item.content_fetched_at is None:
             item.content_fetched_at = utcnow()
         session.flush()
-        return ArticleResult(status="ok", text=item.content_full, fetched=False)
+        return ArticleResult(status="ok", text=text, fetched=False)
 
     if not item.link:
         return _store(session, item, ArticleResult(status="empty", error="no link"))
-
-    feed_text = _readable_feed_text(item.content)
-    if len(feed_text) >= settings.article_min_chars:
-        return _store(
-            session,
-            item,
-            ArticleResult(status="ok", text=feed_text, fetched=False),
-        )
 
     host = urlsplit(item.link).hostname or "unknown"
     started = time.perf_counter()
@@ -131,45 +132,42 @@ def _fetch_page(
 ) -> ArticleResult:
     owns_client = client is None
     active_client = client or make_client(settings)
+    response: httpx.Response | None = None
 
     try:
-        lock = _domain_lock(host)
-        with lock:
-            _wait_for_domain(host, settings.article_delay_seconds)
-            try:
-                with active_client.stream(
-                    "GET",
-                    url,
-                    timeout=settings.article_timeout,
-                    headers={"Accept": _HTML_ACCEPT},
-                ) as response:
-                    _raise_for_status(response)
-                    if not _is_html(response):
-                        return ArticleResult(status="empty", error="not html")
+        try:
+            response, final_url = _open_page(active_client, url, settings)
+            _raise_for_status(response)
+            if not _is_html(response):
+                return ArticleResult(status="empty", error="not html")
 
-                    body, truncated = _read_capped(response, settings.article_max_bytes)
-                    if not body:
-                        return ArticleResult(status="empty", error="empty response")
-
-                    encoding = response.encoding or "utf-8"
-                    markup = body.decode(encoding, errors="replace")
-            except httpx.HTTPStatusError as exc:
-                status = _status_for_http(exc.response.status_code)
-                _capture_error(exc, host=host, status=status)
-                return ArticleResult(
-                    status=status,
-                    error=f"HTTP {exc.response.status_code}",
-                )
-            except httpx.HTTPError as exc:
-                _capture_error(exc, host=host, status="error")
-                return ArticleResult(status="error", error=type(exc).__name__)
-            finally:
-                _DOMAIN_LAST[host] = time.monotonic()
+            body, truncated = _read_capped(response, settings.article_max_bytes)
+            if not body:
+                return ArticleResult(status="empty", error="empty response")
+        except httpx.HTTPStatusError as exc:
+            status = _status_for_http(exc.response.status_code)
+            _capture_error(exc, host=host, status=status)
+            return ArticleResult(
+                status=status,
+                error=f"HTTP {exc.response.status_code}",
+            )
+        except UnsafeUrlError as exc:
+            _capture_error(exc, host=host, status="error")
+            return ArticleResult(status="error", error="unsafe url")
+        except ArticleFetchError as exc:
+            _capture_error(exc, host=host, status="error")
+            return ArticleResult(status="error", error=str(exc))
+        except httpx.HTTPError as exc:
+            _capture_error(exc, host=host, status="error")
+            return ArticleResult(status="error", error=type(exc).__name__)
+        finally:
+            if response is not None:
+                response.close()
 
         try:
             extracted = trafilatura.extract(
-                markup,
-                url=url,
+                body,
+                url=final_url,
                 include_links=False,
                 include_comments=False,
                 include_tables=False,
@@ -205,21 +203,58 @@ def _fetch_page(
             active_client.close()
 
 
+def _open_page(
+    client: httpx.Client,
+    url: str,
+    settings: Settings,
+) -> tuple[httpx.Response, str]:
+    """Open a page while validating every redirect hop before it is requested."""
+
+    current = url
+    seen: set[str] = set()
+
+    for _ in range(_MAX_REDIRECTS + 1):
+        validate_public_url(current)
+        hop_host = urlsplit(current).hostname or "unknown"
+        with _domain_lock(hop_host):
+            _wait_for_domain(hop_host, settings.article_delay_seconds)
+            request = client.build_request(
+                "GET",
+                current,
+                timeout=settings.article_timeout,
+                headers={"Accept": _HTML_ACCEPT},
+            )
+            try:
+                response = client.send(request, stream=True, follow_redirects=False)
+            finally:
+                _DOMAIN_LAST[hop_host] = time.monotonic()
+
+        if response.status_code in _REDIRECT_STATUSES:
+            location = response.headers.get("location")
+            response.close()
+            if not location:
+                raise ArticleFetchError("redirect response without a Location header")
+            next_url = urljoin(current, location)
+            if next_url == current or next_url in seen:
+                raise ArticleFetchError("redirect loop")
+            seen.add(current)
+            current = next_url
+            continue
+
+        return response, str(response.url)
+
+    raise ArticleFetchError("too many redirects")
+
+
 def _store(session: Session, item: Item, result: ArticleResult) -> ArticleResult:
     item.fetch_status = result.status
     item.content_fetched_at = utcnow()
     if result.status == "ok" and result.text:
         item.content_full = result.text
+        # The extracted article supersedes the feed's display fragment.
+        item.content_html = None
     session.flush()
     return result
-
-
-def _readable_feed_text(value: str) -> str:
-    if not value:
-        return ""
-    if "<" not in value:
-        return value.strip()
-    return html.unescape(_TAG.sub(" ", value)).strip()
 
 
 def _read_capped(response: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
@@ -277,9 +312,7 @@ def _capture_error(exc: Exception, *, host: str, status: FetchStatus) -> None:
         with sentry_sdk.new_scope() as scope:
             scope.set_tag("article.host", host)
             scope.set_tag("article.status", status)
-            sentry_sdk.capture_exception(
-                ArticleFetchError(f"{type(exc).__name__}: {status}")
-            )
+            sentry_sdk.capture_exception(ArticleFetchError(f"{type(exc).__name__}: {status}"))
     except Exception:  # pragma: no cover - telemetry must never break extraction
         logger.debug("Sentry article capture failed", exc_info=True)
 

@@ -81,15 +81,32 @@ def seed_item(
     return item
 
 
-def test_feed_crud_and_validation(client: TestClient) -> None:
+def patch_feed_client(monkeypatch, handler) -> None:
+    def make_client(settings):
+        return mock_client(handler)
+
+    monkeypatch.setattr(feeds, "make_client", make_client)
+
+
+def test_feed_crud_and_validation(client: TestClient, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/rss+xml"},
+            content=RSS.encode(),
+        )
+
+    patch_feed_client(monkeypatch, handler)
+
     created = client.post(
         "/api/feeds",
         json={"url": " HTTPS://Example.com/feed.xml#fragment ", "title": "Example"},
     )
 
     assert created.status_code == 201
-    assert created.json()["url"] == "https://example.com/feed.xml"
-    assert created.json()["title"] == "Example"
+    assert created.json()["feed"]["url"] == "https://example.com/feed.xml"
+    assert created.json()["feed"]["title"] == "Example"
+    assert created.json()["result"]["new_items"] == 2
 
     duplicate = client.post("/api/feeds", json={"url": "https://example.com/feed.xml"})
     assert duplicate.status_code == 409
@@ -97,12 +114,119 @@ def test_feed_crud_and_validation(client: TestClient) -> None:
     invalid = client.post("/api/feeds", json={"url": "not a url"})
     assert invalid.status_code == 422
 
-    feed_id = created.json()["id"]
+    credentials = client.post(
+        "/api/feeds",
+        json={"url": "https://user:pass@example.com/feed.xml"},
+    )
+    assert credentials.status_code == 422
+
+    feed_id = created.json()["feed"]["id"]
     assert client.get(f"/api/feeds/{feed_id}").status_code == 200
     assert len(client.get("/api/feeds").json()) == 1
+    assert client.get("/api/items").json()["total"] == 2
 
     assert client.delete(f"/api/feeds/{feed_id}").status_code == 204
     assert client.get(f"/api/feeds/{feed_id}").status_code == 404
+
+
+def test_create_rejects_non_feed_without_row(client: TestClient, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body>Not a feed</body></html>",
+        )
+
+    patch_feed_client(monkeypatch, handler)
+
+    response = client.post("/api/feeds", json={"url": "https://example.com/blog"})
+
+    assert response.status_code == 422
+    assert client.get("/api/feeds").json() == []
+
+
+def test_create_validates_and_ingests_in_one_request(client: TestClient, monkeypatch) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/rss+xml"},
+            content=RSS.encode(),
+        )
+
+    patch_feed_client(monkeypatch, handler)
+
+    response = client.post("/api/feeds", json={"url": "https://example.com/feed.xml"})
+
+    assert response.status_code == 201
+    assert calls == 1
+    assert response.json()["feed"]["title"] == "API Feed"
+    assert response.json()["result"]["new_items"] == 2
+    assert client.get("/api/items").json()["total"] == 2
+
+
+def test_create_maps_network_error_to_502(client: TestClient, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    patch_feed_client(monkeypatch, handler)
+
+    response = client.post("/api/feeds", json={"url": "https://example.com/feed.xml"})
+
+    assert response.status_code == 502
+    assert client.get("/api/feeds").json() == []
+
+
+def test_create_maps_unsafe_to_422(client: TestClient) -> None:
+    response = client.post("/api/feeds", json={"url": "http://127.0.0.1/feed"})
+
+    assert response.status_code == 422
+    assert client.get("/api/feeds").json() == []
+
+
+def test_discover_endpoint_returns_candidates(client: TestClient, monkeypatch) -> None:
+    page = (
+        b"<!doctype html><html><head><title>Example Blog</title>"
+        b'<link rel="alternate" type="application/rss+xml" '
+        b'title="Example Feed" href="/feed.xml"></head><body></body></html>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page,
+        )
+
+    patch_feed_client(monkeypatch, handler)
+
+    response = client.post("/api/feeds/discover", json={"url": "example.com/blog"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["input_url"] == "https://example.com/blog"
+    assert body["page_title"] == "Example Blog"
+    assert body["candidates"] == [
+        {
+            "url": "https://example.com/feed.xml",
+            "title": "Example Feed",
+            "kind": "rss",
+        }
+    ]
+
+
+def test_discover_endpoint_maps_network_error_to_502(client: TestClient, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    patch_feed_client(monkeypatch, handler)
+
+    response = client.post("/api/feeds/discover", json={"url": "https://example.com/blog"})
+
+    assert response.status_code == 502
 
 
 def test_refresh_feed_uses_the_feed_service(
@@ -216,6 +340,18 @@ def test_item_filters_pagination_and_updates(client: TestClient, db_session: Ses
     assert client.get(f"/api/items/{third.id}").status_code == 200
     assert client.get("/api/items/9999").status_code == 404
     assert client.patch("/api/items/9999", json={"is_read": True}).status_code == 404
+
+
+def test_item_exposes_sanitized_content_html(client: TestClient, db_session: Session) -> None:
+    feed = seed_feed(db_session)
+    item = seed_item(db_session, feed, guid="html-item", title="HTML post")
+    item.content_html = "<p>Hello <a href=\"https://example.com\">there</a>.</p>"
+    db_session.commit()
+
+    body = client.get(f"/api/items/{item.id}").json()
+
+    assert body["content_html"] == item.content_html
+    assert body["content"] == ""
 
 
 def test_item_labels_can_be_added_and_removed(client: TestClient, db_session: Session) -> None:

@@ -130,6 +130,140 @@
   }
 }
 
+/* Sanitized feed HTML, tuned to the reading column. */
+.article-html {
+  font-size: var(--text-md);
+  line-height: 1.75;
+  color: var(--text);
+}
+
+.article-html > *:first-child {
+  margin-top: 0;
+}
+
+.article-html p,
+.article-html figure,
+.article-html blockquote,
+.article-html pre,
+.article-html table {
+  margin: 0 0 16px;
+}
+
+.article-html h1,
+.article-html h2,
+.article-html h3,
+.article-html h4,
+.article-html h5,
+.article-html h6 {
+  margin: 24px 0 8px;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.article-html h1 {
+  font-size: 22px;
+}
+
+.article-html h2 {
+  font-size: 19px;
+}
+
+.article-html h3 {
+  font-size: 17px;
+}
+
+.article-html h4,
+.article-html h5,
+.article-html h6 {
+  font-size: var(--text-md);
+}
+
+.article-html a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.article-html a:hover {
+  text-decoration: underline;
+}
+
+.article-html ul,
+.article-html ol {
+  margin: 0 0 16px;
+  padding-left: 24px;
+}
+
+.article-html ul {
+  list-style: disc;
+}
+
+.article-html ol {
+  list-style: decimal;
+}
+
+.article-html li {
+  margin: 4px 0;
+}
+
+.article-html blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-2);
+}
+
+.article-html pre {
+  overflow-x: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--chrome);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.article-html code {
+  padding: 1px 3px;
+  background: var(--chrome);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.article-html pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+.article-html hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--divider);
+}
+
+.article-html table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-base);
+}
+
+.article-html th,
+.article-html td {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.article-html th {
+  background: var(--chrome);
+}
+
+.article-html figcaption {
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
 /* React Flow, tuned to the reader's square, monochrome surfaces. */
 .react-flow {
   --xy-background-color: var(--bg);

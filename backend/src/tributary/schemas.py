@@ -30,6 +30,8 @@ class FeedCreate(BaseModel):
         parts = urlsplit(cleaned)
         if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
             raise ValueError("url must be an absolute http(s) URL")
+        if parts.username is not None or parts.password is not None:
+            raise ValueError("url must not contain credentials")
         return cleaned
 
 
@@ -55,6 +57,27 @@ class FeedRefreshOut(BaseModel):
     error: str | None = None
 
 
+class FeedAddOut(BaseModel):
+    feed: FeedOut
+    result: FeedRefreshOut
+
+
+class FeedDiscoverRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class FeedCandidateOut(BaseModel):
+    url: str
+    title: str = ""
+    kind: str = "unknown"
+
+
+class FeedDiscoveryOut(BaseModel):
+    input_url: str
+    page_title: str | None = None
+    candidates: list[FeedCandidateOut] = Field(default_factory=list)
+
+
 class ItemOut(ORMModel):
     id: int
     feed_id: int
@@ -63,6 +86,7 @@ class ItemOut(ORMModel):
     link: str | None = None
     published: datetime | None = None
     content: str
+    content_html: str | None = None
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
@@ -78,6 +102,7 @@ class ItemOut(ORMModel):
 
 class ArticleFetchOut(BaseModel):
     id: int
+    content_html: str | None = None
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None

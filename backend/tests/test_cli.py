@@ -10,7 +10,7 @@ from tributary.cli import app
 from tributary.config import Settings
 from tributary.db import create_engine, create_session_factory, init_db, session_scope
 from tributary.models import Feed, Item
-from tributary.services import feeds, refine
+from tributary.services import discovery, feeds, refine
 from tributary.services import search as web_search
 from tributary.services.refine import RefinementOutcome, SearchSpec
 from tributary.services.search import SearchOutcome
@@ -75,7 +75,13 @@ def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:
 
     result = runner.invoke(
         app,
-        ["fetch", "https://example.com/feed.xml", "--db", str(db_path)],
+        [
+            "fetch",
+            "https://example.com/feed.xml",
+            "--no-discover",
+            "--db",
+            str(db_path),
+        ],
     )
 
     assert result.exit_code == 0
@@ -93,11 +99,181 @@ def test_fetch_exits_nonzero_on_feed_errors(tmp_path: Path, monkeypatch) -> None
 
     result = runner.invoke(
         app,
-        ["fetch", "https://example.com/missing.xml", "--db", str(db_path)],
+        [
+            "fetch",
+            "https://example.com/missing.xml",
+            "--no-discover",
+            "--db",
+            str(db_path),
+        ],
     )
 
     assert result.exit_code == 1
     assert "404" in result.output
+
+
+def test_discover_prints_candidates(monkeypatch) -> None:
+    page = (
+        b"<!doctype html><html><head><title>Example Blog</title>"
+        b'<link rel="alternate" type="application/rss+xml" '
+        b'title="Example Feed" href="/feed.xml"></head><body></body></html>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page,
+        )
+
+    monkeypatch.setattr(
+        feeds,
+        "make_client",
+        lambda settings: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = runner.invoke(app, ["discover", "example.com/blog"])
+
+    assert result.exit_code == 0
+    assert "Example Blog" in result.output
+    assert "https://example.com/feed.xml" in result.output
+
+
+def test_discover_can_print_json(monkeypatch) -> None:
+    result_obj = discovery.DiscoveryResult(
+        input_url="https://example.com/blog",
+        page_title="Example Blog",
+        candidates=[
+            discovery.FeedCandidate(
+                url="https://example.com/feed.xml",
+                title="Example Feed",
+                kind="rss",
+            )
+        ],
+    )
+    monkeypatch.setattr(discovery, "discover_feed", lambda client, url: result_obj)
+    monkeypatch.setattr(feeds, "make_client", lambda settings: httpx.Client())
+
+    result = runner.invoke(app, ["discover", "https://example.com/blog", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "input_url": "https://example.com/blog",
+        "page_title": "Example Blog",
+        "candidates": [
+            {
+                "url": "https://example.com/feed.xml",
+                "title": "Example Feed",
+                "kind": "rss",
+            }
+        ],
+    }
+
+
+def test_discover_exits_nonzero_without_a_feed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        discovery,
+        "discover_feed",
+        lambda client, url: discovery.DiscoveryResult(input_url=url),
+    )
+    monkeypatch.setattr(feeds, "make_client", lambda settings: httpx.Client())
+
+    result = runner.invoke(app, ["discover", "https://example.com/blog"])
+
+    assert result.exit_code == 1
+    assert "No feed found" in result.output
+
+
+def test_fetch_discovers_the_feed_first(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+    seen: dict[str, str] = {}
+
+    def fake_discover(client, url):
+        return discovery.DiscoveryResult(
+            input_url=url,
+            candidates=[
+                discovery.FeedCandidate(
+                    url="https://example.com/feed.xml",
+                    title="Found Feed",
+                    kind="rss",
+                )
+            ],
+        )
+
+    def fake_fetch(session, url, *, client, min_full_chars=500):
+        seen["url"] = url
+        return feeds.FetchResult(url=url, feed_id=1, title="Found Feed", new_items=1)
+
+    monkeypatch.setattr(discovery, "discover_feed", fake_discover)
+    monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
+    monkeypatch.setattr(feeds, "make_client", lambda settings: httpx.Client())
+
+    result = runner.invoke(
+        app,
+        ["fetch", "https://example.com/blog", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert seen["url"] == "https://example.com/feed.xml"
+    assert "Found Feed: 1 new" in result.output
+
+
+def test_fetch_no_discover_uses_the_exact_url(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+    seen: dict[str, str] = {}
+
+    def fail_discover(client, url):
+        raise AssertionError("discovery should not run with --no-discover")
+
+    def fake_fetch(session, url, *, client, min_full_chars=500):
+        seen["url"] = url
+        return feeds.FetchResult(url=url, feed_id=1, title="Exact", new_items=0)
+
+    monkeypatch.setattr(discovery, "discover_feed", fail_discover)
+    monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
+
+    result = runner.invoke(
+        app,
+        [
+            "fetch",
+            "https://example.com/feed.xml",
+            "--no-discover",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["url"] == "https://example.com/feed.xml"
+
+
+def test_fetch_exits_two_for_multiple_candidates(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+
+    def fake_discover(client, url):
+        return discovery.DiscoveryResult(
+            input_url=url,
+            candidates=[
+                discovery.FeedCandidate(url="https://example.com/one.xml", kind="rss"),
+                discovery.FeedCandidate(url="https://example.com/two.xml", kind="atom"),
+            ],
+        )
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("fetch should not run until a candidate is chosen")
+
+    monkeypatch.setattr(discovery, "discover_feed", fake_discover)
+    monkeypatch.setattr(feeds, "fetch_feed", fail_fetch)
+    monkeypatch.setattr(feeds, "make_client", lambda settings: httpx.Client())
+
+    result = runner.invoke(
+        app,
+        ["fetch", "https://example.com/blog", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "https://example.com/one.xml" in result.output
+    assert "https://example.com/two.xml" in result.output
 
 
 def test_refresh_without_feeds_succeeds(tmp_path: Path) -> None:

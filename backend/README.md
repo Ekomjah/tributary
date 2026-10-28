@@ -16,7 +16,9 @@ The API is at <http://127.0.0.1:8000>, with interactive docs at
 <http://127.0.0.1:8000/docs>. Copy the repository-level `.env.example` to `.env`
 to override defaults. The CLI is built with Typer; `uv run tributary --help` lists
 every command. Sentry is enabled by default once `SENTRY_DSN` is set; set
-`SENTRY_ENABLED=false` to opt out.
+`SENTRY_ENABLED=false` to opt out. Monitoring captures request data, stack
+variables and GenAI prompts/responses by default; each category has a
+`SENTRY_COLLECT_*` switch, and secrets are redacted.
 
 The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 

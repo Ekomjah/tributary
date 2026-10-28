@@ -3,6 +3,8 @@ import axios, { type AxiosRequestConfig } from "axios";
 import type {
   ArticleFetch,
   Feed,
+  FeedAddResult,
+  FeedDiscovery,
   FeedRefreshResult,
   Item,
   ItemPage,
@@ -108,8 +110,16 @@ export const api = {
     return request<Feed[]>({ url: "/api/feeds", signal });
   },
 
-  createFeed(url: string): Promise<Feed> {
-    return request<Feed>({
+  discoverFeeds(url: string): Promise<FeedDiscovery> {
+    return request<FeedDiscovery>({
+      url: "/api/feeds/discover",
+      method: "POST",
+      data: { url },
+    });
+  },
+
+  createFeed(url: string): Promise<FeedAddResult> {
+    return request<FeedAddResult>({
       url: "/api/feeds",
       method: "POST",
       data: { url },

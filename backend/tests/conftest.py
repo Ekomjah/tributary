@@ -20,6 +20,14 @@ def _disable_sentry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TRIBUTARY_SENTRY_DSN", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _fake_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep URL validation offline; a test can override the resolver itself."""
+    from tributary.services import urls
+
+    monkeypatch.setattr(urls, "_resolve_host", lambda host, port: ["93.184.216.34"])
+
+
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     monkeypatch.setenv("TRIBUTARY_DB_PATH", str(tmp_path / "test.db"))

@@ -69,6 +69,7 @@ class Item(Base):
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
     published: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_full: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     fetch_status: Mapped[str | None] = mapped_column(String(16), nullable=True)

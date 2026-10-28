@@ -76,6 +76,7 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 
 _ITEM_COLUMNS: dict[str, str] = {
+    "content_html": "TEXT",
     "content_full": "TEXT",
     "content_fetched_at": "DATETIME",
     "fetch_status": "VARCHAR(16)",
@@ -93,9 +94,7 @@ def _migrate_feeds(engine: Engine) -> None:
     """Add the feed kind to an existing SQLite database."""
 
     with engine.begin() as connection:
-        existing = {
-            str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(feeds)")
-        }
+        existing = {str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(feeds)")}
         for name, ddl in _FEED_COLUMNS.items():
             if name not in existing:
                 connection.exec_driver_sql(f"ALTER TABLE feeds ADD COLUMN {name} {ddl}")
@@ -109,23 +108,10 @@ def _migrate_items(engine: Engine) -> None:
     """
 
     with engine.begin() as connection:
-        existing = {
-            str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(items)")
-        }
+        existing = {str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(items)")}
         for name, ddl in _ITEM_COLUMNS.items():
             if name not in existing:
                 connection.exec_driver_sql(f"ALTER TABLE items ADD COLUMN {name} {ddl}")
-
-        # Older rows may already hold a full article from the feed. Backfill
-        # readable text only; raw HTML is left for the extractor to clean.
-        connection.exec_driver_sql(
-            "UPDATE items "
-            "SET content_full = content, fetch_status = 'ok', "
-            "content_fetched_at = fetched_at "
-            "WHERE content_full IS NULL "
-            "AND length(content) >= 500 "
-            "AND instr(content, '<') = 0"
-        )
 
 
 def init_db(engine: Engine) -> None:

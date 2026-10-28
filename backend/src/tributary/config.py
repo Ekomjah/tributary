@@ -152,6 +152,74 @@ class Settings(BaseSettings):
             "TRIBUTARY_SENTRY_PROFILES_SAMPLE_RATE",
         ),
     )
+    # Sentry's data_collection defaults are monitoring-oriented. These switches
+    # let a deployment tighten or widen what leaves the machine without editing
+    # code. Secrets are still redacted by the scrubber in observability.py.
+    sentry_send_user_info: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_SEND_USER_INFO",
+            "TRIBUTARY_SENTRY_SEND_USER_INFO",
+        ),
+    )
+    sentry_collect_http_headers: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_HTTP_HEADERS",
+            "TRIBUTARY_SENTRY_COLLECT_HTTP_HEADERS",
+        ),
+    )
+    sentry_collect_http_bodies: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_HTTP_BODIES",
+            "TRIBUTARY_SENTRY_COLLECT_HTTP_BODIES",
+        ),
+    )
+    sentry_collect_query_params: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_QUERY_PARAMS",
+            "TRIBUTARY_SENTRY_COLLECT_QUERY_PARAMS",
+        ),
+    )
+    sentry_collect_gen_ai: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_GEN_AI",
+            "TRIBUTARY_SENTRY_COLLECT_GEN_AI",
+        ),
+    )
+    sentry_collect_db_queries: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_DB_QUERIES",
+            "TRIBUTARY_SENTRY_COLLECT_DB_QUERIES",
+        ),
+    )
+    sentry_collect_stack_variables: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SENTRY_COLLECT_STACK_VARIABLES",
+            "TRIBUTARY_SENTRY_COLLECT_STACK_VARIABLES",
+        ),
+    )
+    sentry_frame_context_lines: int = Field(
+        default=5,
+        ge=0,
+        le=50,
+        validation_alias=AliasChoices(
+            "SENTRY_FRAME_CONTEXT_LINES",
+            "TRIBUTARY_SENTRY_FRAME_CONTEXT_LINES",
+        ),
+    )
+    sentry_max_request_body_size: Literal["never", "small", "medium", "always"] = Field(
+        default="medium",
+        validation_alias=AliasChoices(
+            "SENTRY_MAX_REQUEST_BODY_SIZE",
+            "TRIBUTARY_SENTRY_MAX_REQUEST_BODY_SIZE",
+        ),
+    )
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +19,7 @@ from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
 from .models import Feed, Item
 from .observability import init_sentry
-from .services import feeds, model, refine
+from .services import discovery, feeds, model, refine
 from .services import search as web_search
 
 _SENTRY_READY = False
@@ -153,13 +154,83 @@ def init_database(
     typer.echo(f"Initialized database at {settings.db_path}")
 
 
+@app.command("discover")
+def discover(
+    url: Annotated[str, typer.Argument(help="Blog or feed URL to inspect.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
+) -> None:
+    """Find feed candidates at a URL without subscribing."""
+    settings = _load_settings()
+    try:
+        with feeds.make_client(settings) as client:
+            found = discovery.discover_feed(client, url)
+    except Exception as exc:
+        typer.echo(f"Could not discover a feed at {url}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(asdict(found), indent=2))
+    elif found.candidates:
+        if found.page_title:
+            typer.echo(f"Feeds on {found.page_title}:")
+        for candidate in found.candidates:
+            label = candidate.title or candidate.kind
+            typer.echo(f"{label}: {candidate.url} ({candidate.kind})")
+    else:
+        typer.echo(f"No feed found at {found.input_url}.", err=True)
+
+    if not found.candidates:
+        raise typer.Exit(code=1)
+
+
 @app.command("fetch")
 def fetch(
-    url: Annotated[str, typer.Argument(help="Feed URL to fetch and subscribe to.")],
+    url: Annotated[str, typer.Argument(help="Blog or feed URL to fetch and subscribe to.")],
+    no_discover: Annotated[
+        bool,
+        typer.Option(
+            "--no-discover",
+            help="Treat the URL as the feed itself instead of looking for one.",
+        ),
+    ] = False,
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
 ) -> None:
     """Fetch one feed and save its new items."""
     settings = _load_settings(db)
+    target = url
+
+    if not no_discover:
+        try:
+            with feeds.make_client(settings) as client:
+                found = discovery.discover_feed(client, url)
+        except Exception as exc:
+            typer.echo(f"Could not discover a feed at {url}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
+        if not found.candidates:
+            typer.echo(
+                f"No feed found at {found.input_url}. If you already have the feed URL, "
+                "retry with --no-discover.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if len(found.candidates) > 1:
+            typer.echo(
+                f"Found {len(found.candidates)} feeds at {found.input_url}:",
+                err=True,
+            )
+            for candidate in found.candidates:
+                label = candidate.title or candidate.kind
+                typer.echo(f"  {label}: {candidate.url}", err=True)
+            typer.echo(
+                "Run `tributary fetch <feed-url> --no-discover` to choose one.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
+        target = found.candidates[0].url
+
     engine = create_engine(settings)
     try:
         init_db(engine)
@@ -171,12 +242,12 @@ def fetch(
         ):
             result = feeds.fetch_feed(
                 session,
-                url,
+                target,
                 client=client,
                 min_full_chars=settings.article_min_chars,
             )
     except Exception as exc:
-        typer.echo(f"Could not fetch {url}: {exc}", err=True)
+        typer.echo(f"Could not fetch {target}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     finally:
         engine.dispose()

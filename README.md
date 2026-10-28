@@ -127,6 +127,12 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 | `SENTRY_ENABLED`              | Set to `false` to opt out of Sentry                              | `true`                   |
 | `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1                            | `0.25`                   |
 | `SENTRY_PROFILES_SAMPLE_RATE` | Share of traces profiled, from 0 to 1                            | `0.1`                    |
+| `SENTRY_COLLECT_GEN_AI`       | Capture model prompts and responses in GenAI spans               | `true`                   |
+| `SENTRY_COLLECT_HTTP_BODIES`  | Capture request and response bodies                              | `true`                   |
+| `SENTRY_MAX_REQUEST_BODY_SIZE`| Body cap: `never`, `small`, `medium` or `always`                 | `medium`                 |
+| `SENTRY_COLLECT_STACK_VARIABLES` | Capture local variables in stack frames                       | `true`                   |
+
+The rest of the Sentry switches (`SENTRY_SEND_USER_INFO`, `SENTRY_COLLECT_HTTP_HEADERS`, `SENTRY_COLLECT_QUERY_PARAMS`, `SENTRY_COLLECT_DB_QUERIES`, `SENTRY_FRAME_CONTEXT_LINES`) are documented in `.env.example`.
 | `TRIBUTARY_FETCH_TIMEOUT`     | Seconds before a feed request times out                          | `20`                     |
 | `NEXT_PUBLIC_API_BASE`        | API address used by the reader                                   | `http://127.0.0.1:8000`  |
 
@@ -135,12 +141,12 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 - Your feeds, stars and labels stay on your machine in a local SQLite file.
 - When a feed only sends an excerpt, Tributary fetches the article page directly from the publisher, from your machine, the first time you open that item. The request carries Tributary's User-Agent and no account, cookies or reading history. The page is cleaned to text and cached in your local database.
 - Article text is not sent to a cloud service. The AI boxes use the local Ollama instance, and only extracted article text is sent to it.
-- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, headers, cookies, query strings, local variables or default PII.
+- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs, feed metrics and GenAI spans. With the monitoring defaults it also receives request bodies, headers, database query data, stack variables and model prompts/responses; cookies, GraphQL and queues stay off. API keys and URL query strings are redacted, and every category can be turned off with the `SENTRY_COLLECT_*` switches.
 - The Search box is off unless `SERPAPI_API_KEY` is configured. When it runs, your request is refined by the local Ollama instance, then only the refined query, engine, locale and freshness go to SerpAPI, never article text or reading history. Results are stored in your local database and cached for six hours.
 
 ## Monitoring
 
-Sentry is enabled by default when a DSN is configured. Feed refreshes record duration, new-item counts and failures as errors and metrics. Search records request, cache-hit and error counts plus latency; the API key is redacted from every event. A pipe run is one trace with a span per box. Set `SENTRY_ENABLED=false` to turn all of it off.
+Sentry is enabled by default when a DSN is configured. Feed refreshes record duration, new-item counts and failures as errors and metrics. Search records request, cache-hit and error counts plus latency; API keys and URL query strings are redacted from every event. A pipe run is one trace with a span per box. AI boxes and query refinement emit `gen_ai.chat` spans with the model, token counts and, when `SENTRY_COLLECT_GEN_AI=true`, the prompts and responses. Set `SENTRY_ENABLED=false` to turn all of it off.
 
 ## Deployment
 
