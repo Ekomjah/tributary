@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+import ollama
 import pytest
+from sentry_sdk.consts import SPANDATA
 from sqlalchemy.orm import Session
 
 from tributary.boxes.ai import MeaningFilterBox, SummarizeBox, WhyCareBox
@@ -11,6 +15,7 @@ from tributary.boxes.base import RunContext
 from tributary.config import Settings
 from tributary.models import Feed, Item
 from tributary.schemas import ItemOut
+from tributary.services import model as model_service
 from tributary.services.cache import params_hash
 from tributary.services.model import ModelError, OllamaModelClient
 
@@ -229,9 +234,7 @@ def test_ollama_client_parses_json_and_hides_prompts() -> None:
 def test_ollama_client_reports_bad_json() -> None:
     client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
     client._client = SimpleNamespace(  # type: ignore[assignment]
-        chat=lambda **kwargs: SimpleNamespace(
-            message=SimpleNamespace(content="not json")
-        )
+        chat=lambda **kwargs: SimpleNamespace(message=SimpleNamespace(content="not json"))
     )
 
     with pytest.raises(ModelError, match="valid JSON"):
@@ -242,9 +245,173 @@ def test_ollama_client_reports_an_unreachable_server() -> None:
     client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
 
     def fail(**kwargs: Any) -> None:
-        raise OSError("connection refused")
+        raise ConnectionError("connection refused")
 
     client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
 
-    with pytest.raises(ModelError, match="http://test"):
+    with pytest.raises(ModelError, match="Could not reach Ollama at http://test"):
         client.generate_json("private text", schema={"type": "object"})
+
+
+def test_ollama_client_reports_the_ollama_error_body() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+
+    def fail(**kwargs: Any) -> None:
+        raise ollama.ResponseError("model 'gemma3:1b' not found", 404)
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError) as excinfo:
+        client.generate_json("text", schema={"type": "object"})
+
+    message = str(excinfo.value)
+    assert "(404)" in message
+    assert "model 'gemma3:1b' not found" in message
+    assert "Is it running" not in message
+
+
+def test_ollama_client_reports_a_timeout() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=120)
+
+    def fail(**kwargs: Any) -> None:
+        raise httpx.ReadTimeout("timed out")
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError, match="did not finish within 120s"):
+        client.generate_json("text", schema={"type": "object"})
+
+
+def test_ollama_client_retries_a_repeat_abort() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    calls: list[dict[str, Any]] = []
+
+    def chat(**kwargs: Any) -> SimpleNamespace:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ollama.ResponseError("prediction aborted, token repeat limit reached", 500)
+        return SimpleNamespace(
+            message=SimpleNamespace(content='{"why": "It connects to your stars."}')
+        )
+
+    client._client = SimpleNamespace(chat=chat)  # type: ignore[assignment]
+
+    result = client.generate_json("text", schema={"type": "object"})
+
+    assert result == {"why": "It connects to your stars."}
+    assert len(calls) == 2
+    assert calls[0]["options"]["temperature"] == 0
+    assert calls[0]["options"]["repeat_penalty"] == 1.1
+    assert calls[0]["options"]["repeat_last_n"] == 128
+    assert calls[0]["options"]["num_predict"] > 0
+    assert calls[1]["options"]["temperature"] == 0.2
+
+
+def test_ollama_client_stops_after_one_repeat_abort_retry() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    calls: list[dict[str, Any]] = []
+
+    def fail(**kwargs: Any) -> None:
+        calls.append(kwargs)
+        raise ollama.ResponseError("prediction aborted, token repeat limit reached", 500)
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError, match="token repeat limit"):
+        client.generate_json("text", schema={"type": "object"})
+
+    assert len(calls) == 2
+
+
+def test_ollama_client_does_not_retry_other_http_errors() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    calls: list[dict[str, Any]] = []
+
+    def fail(**kwargs: Any) -> None:
+        calls.append(kwargs)
+        raise ollama.ResponseError("model 'gemma3:1b' not found", 404)
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError, match="not found"):
+        client.generate_json("text", schema={"type": "object"})
+
+    assert len(calls) == 1
+
+
+class FakeSpan:
+    def __init__(self) -> None:
+        self.data: dict[str, Any] = {}
+        self.status: str | None = None
+
+    def set_data(self, key: str, value: Any) -> None:
+        self.data[key] = value
+
+    def set_status(self, value: str) -> None:
+        self.status = value
+
+    def __enter__(self) -> FakeSpan:
+        return self
+
+    def __exit__(self, *args: Any) -> bool:
+        return False
+
+
+def test_ollama_client_records_gen_ai_io(monkeypatch) -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(
+            message=SimpleNamespace(content='{"summary": "Hello."}'),
+            model="gemma3:1b",
+            prompt_eval_count=12,
+            eval_count=4,
+        )
+    )
+    span = FakeSpan()
+    monkeypatch.setattr(
+        model_service,
+        "get_start_span_function",
+        lambda: lambda **kwargs: span,
+    )
+    monkeypatch.setattr(model_service, "_collect_gen_ai", lambda kind: True)
+
+    result = client.generate_json(
+        "secret article text",
+        schema={"type": "object"},
+        system="Be brief.",
+    )
+
+    assert result == {"summary": "Hello."}
+    assert json.loads(span.data[SPANDATA.GEN_AI_INPUT_MESSAGES]) == [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "secret article text"},
+    ]
+    assert json.loads(span.data[SPANDATA.GEN_AI_OUTPUT_MESSAGES]) == [
+        {"role": "assistant", "content": '{"summary": "Hello."}'}
+    ]
+    assert span.data[SPANDATA.GEN_AI_REQUEST_MODEL] == "gemma3:1b"
+    assert span.data[SPANDATA.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.data[SPANDATA.GEN_AI_USAGE_OUTPUT_TOKENS] == 4
+    assert span.data[SPANDATA.GEN_AI_USAGE_TOTAL_TOKENS] == 16
+
+
+def test_ollama_client_can_omit_gen_ai_content(monkeypatch) -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(
+            message=SimpleNamespace(content='{"summary": "Hello."}')
+        )
+    )
+    span = FakeSpan()
+    monkeypatch.setattr(
+        model_service,
+        "get_start_span_function",
+        lambda: lambda **kwargs: span,
+    )
+    monkeypatch.setattr(model_service, "_collect_gen_ai", lambda kind: False)
+
+    client.generate_json("secret article text", schema={"type": "object"})
+
+    assert SPANDATA.GEN_AI_INPUT_MESSAGES not in span.data
+    assert SPANDATA.GEN_AI_OUTPUT_MESSAGES not in span.data
+    assert span.data[SPANDATA.GEN_AI_OPERATION_NAME] == "chat"
