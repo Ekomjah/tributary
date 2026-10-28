@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Decision = Literal["keep", "drop"]
+FetchStatus = Literal["ok", "empty", "blocked", "error"]
 
 
 class ORMModel(BaseModel):
@@ -61,12 +62,22 @@ class ItemOut(ORMModel):
     link: str | None = None
     published: datetime | None = None
     content: str
+    content_full: str | None = None
+    content_fetched_at: datetime | None = None
+    fetch_status: FetchStatus | None = None
     is_read: bool
     starred: bool
     decision: Decision | None = None
     fetched_at: datetime
     labels: list[LabelOut] = Field(default_factory=list)
     summary: str | None = None
+
+
+class ArticleFetchOut(BaseModel):
+    id: int
+    content_full: str | None = None
+    content_fetched_at: datetime | None = None
+    fetch_status: FetchStatus | None = None
 
 
 class ItemUpdate(BaseModel):

@@ -75,11 +75,46 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+_ITEM_COLUMNS: dict[str, str] = {
+    "content_full": "TEXT",
+    "content_fetched_at": "DATETIME",
+    "fetch_status": "VARCHAR(16)",
+}
+
+
+def _migrate_items(engine: Engine) -> None:
+    """Add reader columns to an existing SQLite database.
+
+    ``create_all`` only creates missing tables, so a database made before the
+    article extractor existed needs the new item columns added in place.
+    """
+
+    with engine.begin() as connection:
+        existing = {
+            str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(items)")
+        }
+        for name, ddl in _ITEM_COLUMNS.items():
+            if name not in existing:
+                connection.exec_driver_sql(f"ALTER TABLE items ADD COLUMN {name} {ddl}")
+
+        # Older rows may already hold a full article from the feed. Backfill
+        # readable text only; raw HTML is left for the extractor to clean.
+        connection.exec_driver_sql(
+            "UPDATE items "
+            "SET content_full = content, fetch_status = 'ok', "
+            "content_fetched_at = fetched_at "
+            "WHERE content_full IS NULL "
+            "AND length(content) >= 500 "
+            "AND instr(content, '<') = 0"
+        )
+
+
 def init_db(engine: Engine) -> None:
     # Importing the models registers their tables on Base.metadata.
     from . import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+    _migrate_items(engine)
 
 
 @contextmanager
