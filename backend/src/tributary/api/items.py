@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import Item, Label
+from ..models import Feed, Item, Label
 from ..schemas import ArticleFetchOut, Decision, ItemOut, ItemPage, ItemUpdate
 from ..services import articles
 from .deps import DbSession
@@ -28,6 +28,10 @@ def _item_query(
         stmt = stmt.where(Item.starred.is_(starred))
     if feed_id is not None:
         stmt = stmt.where(Item.feed_id == feed_id)
+    else:
+        # Search results live in virtual feeds. They show up under Searches,
+        # not mixed into All items, Unread or Starred.
+        stmt = stmt.where(Item.feed.has(Feed.kind != "search"))
     if label:
         stmt = stmt.where(Item.labels.any(Label.name == label))
     if decision is not None:

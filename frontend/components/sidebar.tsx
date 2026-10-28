@@ -4,6 +4,7 @@ import {
   Lock,
   Plus,
   Rss,
+  Search,
   Star,
   Tag,
 } from "lucide-react";
@@ -114,6 +115,9 @@ export default function Sidebar({
   onAddFeed,
   onAddLabel,
 }: SidebarProps) {
+  const subscriptions = feeds.filter((feed) => feed.kind !== "search");
+  const searches = feeds.filter((feed) => feed.kind === "search");
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex-1 overflow-y-auto py-3">
@@ -152,10 +156,10 @@ export default function Sidebar({
           </SectionTitle>
 
           <div className="flex flex-col">
-            {feeds.length === 0 ? (
+            {subscriptions.length === 0 ? (
               <p className="px-2 py-1 text-[12px] text-faint">No feeds yet.</p>
             ) : (
-              feeds.map((feed) => (
+              subscriptions.map((feed) => (
                 <Row
                   key={feed.id}
                   active={feedId === feed.id}
@@ -165,6 +169,35 @@ export default function Sidebar({
                   onClick={() => onSelectFeed(feed.id)}
                 >
                   {feed.title || feed.url}
+                </Row>
+              ))
+            )}
+          </div>
+        </section>
+
+        <div className="my-2 border-t border-divider" />
+
+        <section aria-labelledby="sidebar-searches">
+          <SectionTitle>
+            <span id="sidebar-searches">Searches</span>
+          </SectionTitle>
+
+          <div className="flex flex-col">
+            {searches.length === 0 ? (
+              <p className="px-2 py-1 text-[12px] text-faint">
+                No searches yet.
+              </p>
+            ) : (
+              searches.map((feed) => (
+                <Row
+                  key={feed.id}
+                  active={feedId === feed.id}
+                  icon={Search}
+                  count={feedCounts[feed.id] ?? 0}
+                  title={feed.url}
+                  onClick={() => onSelectFeed(feed.id)}
+                >
+                  {feed.title || "Search"}
                 </Row>
               ))
             )}

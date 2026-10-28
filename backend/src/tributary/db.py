@@ -79,9 +79,26 @@ _ITEM_COLUMNS: dict[str, str] = {
     "content_full": "TEXT",
     "content_fetched_at": "DATETIME",
     "fetch_status": "VARCHAR(16)",
+    "source": "VARCHAR(500)",
     "summary": "TEXT",
     "why_care": "TEXT",
 }
+
+_FEED_COLUMNS: dict[str, str] = {
+    "kind": "VARCHAR(16) NOT NULL DEFAULT 'feed'",
+}
+
+
+def _migrate_feeds(engine: Engine) -> None:
+    """Add the feed kind to an existing SQLite database."""
+
+    with engine.begin() as connection:
+        existing = {
+            str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(feeds)")
+        }
+        for name, ddl in _FEED_COLUMNS.items():
+            if name not in existing:
+                connection.exec_driver_sql(f"ALTER TABLE feeds ADD COLUMN {name} {ddl}")
 
 
 def _migrate_items(engine: Engine) -> None:
@@ -116,6 +133,7 @@ def init_db(engine: Engine) -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+    _migrate_feeds(engine)
     _migrate_items(engine)
 
 

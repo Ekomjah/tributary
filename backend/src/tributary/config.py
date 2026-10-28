@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -86,6 +87,36 @@ class Settings(BaseSettings):
             "TRIBUTARY_ARTICLE_MIN_CHARS",
             "ARTICLE_MIN_CHARS",
         ),
+    )
+    serpapi_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SERPAPI_API_KEY", "TRIBUTARY_SERPAPI_API_KEY"),
+    )
+    serpapi_engine: Literal["google_news", "google"] = Field(
+        default="google_news",
+        validation_alias=AliasChoices("SERPAPI_ENGINE", "TRIBUTARY_SERPAPI_ENGINE"),
+    )
+    serpapi_max_results: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices(
+            "SERPAPI_MAX_RESULTS",
+            "TRIBUTARY_SERPAPI_MAX_RESULTS",
+        ),
+    )
+    serpapi_cache_ttl: int = Field(
+        default=21_600,
+        ge=60,
+        validation_alias=AliasChoices(
+            "SERPAPI_CACHE_TTL",
+            "TRIBUTARY_SERPAPI_CACHE_TTL",
+        ),
+    )
+    serpapi_timeout: float = Field(
+        default=20.0,
+        gt=0,
+        validation_alias=AliasChoices("SERPAPI_TIMEOUT", "TRIBUTARY_SERPAPI_TIMEOUT"),
     )
     user_agent: str = Field(
         default="Tributary/0.1 (+https://github.com/Ekomjah/tributary)",

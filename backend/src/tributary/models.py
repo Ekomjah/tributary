@@ -34,6 +34,7 @@ class Feed(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="feed", index=True)
     last_fetched: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     etag: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_modified: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -71,6 +72,7 @@ class Item(Base):
     content_full: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     fetch_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(500), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     why_care: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
@@ -181,3 +183,16 @@ class BoxCache(Base):
             f"BoxCache(item_id={self.item_id!r}, box={self.box!r}, "
             f"params_hash={self.params_hash!r}, model={self.model!r})"
         )
+
+
+class SearchCache(Base):
+    __tablename__ = "search_cache"
+
+    params_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    params_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    results_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)
+
+    def __repr__(self) -> str:
+        return f"SearchCache(params_hash={self.params_hash!r})"

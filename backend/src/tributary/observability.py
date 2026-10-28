@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -11,6 +12,20 @@ from . import __version__
 from .config import Settings
 
 logger = logging.getLogger(__name__)
+
+_API_KEY = re.compile(r"(api_key=)[^&\s\"']+", re.IGNORECASE)
+
+
+def _scrub(value):
+    """Redact SerpAPI keys from any string in a Sentry event or transaction."""
+
+    if isinstance(value, str):
+        return _API_KEY.sub(r"\1[Filtered]", value)
+    if isinstance(value, dict):
+        return {key: _scrub(entry) for key, entry in value.items()}
+    if isinstance(value, list):
+        return [_scrub(entry) for entry in value]
+    return value
 
 
 def init_sentry(settings: Settings) -> None:
@@ -48,6 +63,8 @@ def init_sentry(settings: Settings) -> None:
             "frame_context_lines": 0,
         },
         max_request_body_size="never",
+        before_send=_scrub,
+        before_send_transaction=_scrub,
         traces_sample_rate=settings.sentry_traces_sample_rate,
         profile_session_sample_rate=settings.sentry_profiles_sample_rate,
         profile_lifecycle="trace",

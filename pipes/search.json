@@ -1,0 +1,17 @@
+{
+  "name": "AI regulation this week",
+  "steps": [
+    {
+      "box": "search",
+      "query": "AI regulation this week",
+      "engine": "google_news",
+      "freshness": "week",
+      "max_results": 10,
+      "refine": true
+    },
+    { "box": "dedupe", "by": "link" },
+    { "box": "sort", "by": "published", "order": "desc" },
+    { "box": "limit", "count": 5 },
+    { "box": "fulltext" }
+  ]
+}

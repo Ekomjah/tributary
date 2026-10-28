@@ -62,6 +62,11 @@ def refresh_feed(feed_id: int, request: Request, db: DbSession) -> FeedRefreshOu
     feed = db.get(Feed, feed_id)
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
+    if feed.kind == "search":
+        raise HTTPException(
+            status_code=400,
+            detail="Search feeds refresh when you run the search again.",
+        )
 
     settings = request.app.state.settings
     with feeds.make_client(settings) as client:

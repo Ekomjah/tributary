@@ -68,8 +68,20 @@ class WhyCareStep(StrictModel):
     box: Literal["whycare"]
 
 
+class SearchStep(StrictModel):
+    box: Literal["search"]
+    query: str = Field(min_length=1, max_length=500)
+    engine: Literal["google_news", "google"] | None = None
+    gl: str | None = Field(default=None, min_length=2, max_length=5)
+    hl: str | None = Field(default=None, min_length=2, max_length=5)
+    freshness: Literal["day", "week", "month", "year"] | None = None
+    max_results: int | None = Field(default=None, ge=1, le=20)
+    refine: bool = False
+
+
 PipeStep = Annotated[
     FetchStep
+    | SearchStep
     | MergeStep
     | DedupeStep
     | FilterStep

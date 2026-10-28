@@ -19,6 +19,7 @@ from .db import create_engine, create_session_factory, init_db, session_scope
 from .models import Feed, Item
 from .observability import init_sentry
 from .services import feeds, model
+from .services import search as web_search
 
 _SENTRY_READY = False
 
@@ -212,6 +213,65 @@ def refresh(
         raise typer.Exit(code=1)
 
 
+@app.command("search")
+def search_web(
+    query: Annotated[str, typer.Argument(help="What to search for, in plain language.")],
+    db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
+    max_results: Annotated[
+        int | None,
+        typer.Option("--max-results", "-n", min=1, max=20, help="How many results to keep."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the results as JSON."),
+    ] = False,
+) -> None:
+    """Search the web with SerpAPI and save the results as a search feed."""
+    settings = _load_settings(db)
+    engine = create_engine(settings)
+    try:
+        init_db(engine)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            params = web_search.make_params(
+                settings,
+                query,
+                max_results=max_results,
+            )
+            outcome = web_search.run_search(
+                session,
+                settings,
+                params,
+                raw_query=query,
+            )
+    except web_search.SearchError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:
+        typer.echo(f"Search failed: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [item.model_dump(mode="json") for item in outcome.items],
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    status = "cached" if outcome.cached else f"{outcome.seconds:.1f}s"
+    typer.echo(
+        f"Search: {outcome.query!r} -> {outcome.params.q!r} "
+        f"({outcome.params.engine}, {len(outcome.items)} result(s), {status})"
+    )
+    for item in outcome.items:
+        source = f" — {item.source}" if item.source else ""
+        typer.echo(f"- {item.title}{source}")
+
+
 @app.command("run")
 def run_pipe_file(
     path: Annotated[Path, typer.Argument(help="Path to a pipe JSON file.")],
@@ -311,7 +371,7 @@ def export_training(
 def doctor(
     db: Annotated[Path | None, typer.Option(help="Path to the SQLite database.")] = None,
 ) -> None:
-    """Check the database, Ollama and Sentry setup."""
+    """Check the database, Ollama, SerpAPI and Sentry setup."""
     settings = _load_settings(db)
     failures = 0
 
@@ -355,6 +415,14 @@ def doctor(
         typer.echo(
             f"WARN  ollama    model {settings.ollama_model!r} is not installed; "
             f"run `ollama pull {settings.ollama_model}`",
+            err=True,
+        )
+
+    if settings.serpapi_api_key:
+        typer.echo("OK    serpapi   key configured")
+    else:
+        typer.echo(
+            "WARN  serpapi   SERPAPI_API_KEY is not set; the Search box is off",
             err=True,
         )
 

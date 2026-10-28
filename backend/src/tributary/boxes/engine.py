@@ -17,6 +17,7 @@ from .plain import (
     MergeBox,
     SortBox,
 )
+from .search import SearchBox
 from .spec import (
     DedupeStep,
     FetchStep,
@@ -26,6 +27,7 @@ from .spec import (
     MeaningStep,
     MergeStep,
     PipeSpec,
+    SearchStep,
     SortStep,
     SummarizeStep,
     WhyCareStep,
@@ -52,6 +54,7 @@ class PipeRunResult:
 
 def _build_box(
     step: FetchStep
+    | SearchStep
     | MergeStep
     | DedupeStep
     | FilterStep
@@ -64,6 +67,16 @@ def _build_box(
 ) -> Box:
     if isinstance(step, FetchStep):
         return FetchBox(step.urls)
+    if isinstance(step, SearchStep):
+        return SearchBox(
+            step.query,
+            engine=step.engine,
+            gl=step.gl,
+            hl=step.hl,
+            freshness=step.freshness,
+            max_results=step.max_results,
+            refine=step.refine,
+        )
     if isinstance(step, MergeStep):
         return MergeBox()
     if isinstance(step, DedupeStep):

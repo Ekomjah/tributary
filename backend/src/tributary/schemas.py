@@ -37,6 +37,7 @@ class FeedOut(ORMModel):
     id: int
     url: str
     title: str
+    kind: str = "feed"
     last_fetched: datetime | None = None
     last_error: str | None = None
     created_at: datetime
@@ -65,6 +66,7 @@ class ItemOut(ORMModel):
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
+    source: str | None = None
     is_read: bool
     starred: bool
     decision: Decision | None = None
@@ -93,6 +95,29 @@ class ItemPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+SearchEngine = Literal["google_news", "google"]
+SearchFreshness = Literal["day", "week", "month", "year"]
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    engine: SearchEngine | None = None
+    gl: str | None = Field(default=None, min_length=2, max_length=5)
+    hl: str | None = Field(default=None, min_length=2, max_length=5)
+    freshness: SearchFreshness | None = None
+    max_results: int | None = Field(default=None, ge=1, le=20)
+
+
+class SearchOut(BaseModel):
+    query: str
+    q: str
+    engine: str
+    freshness: SearchFreshness | None = None
+    cached: bool
+    seconds: float
+    items: list[ItemOut]
 
 
 class LabelCreate(BaseModel):

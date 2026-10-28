@@ -79,7 +79,8 @@ Three zones, as in the reference:
 
 ## Sidebar: the feed tree
 
-- Top entries: **Home**, **All items**, **Starred items**, then a divider, then **Pipes**, then your **Feeds**.
+- Top entries: **Home**, **All items**, **Starred items**, then a divider, then **Pipes**, then your **Feeds**, then **Searches**.
+- **Searches:** virtual feeds created by the Search box, with a small magnifier instead of a favicon. They use the same row shape, stay out of All items, and never refresh with the other feeds.
 - **Folders:** a small triangle (right when collapsed, down when open), a folder glyph, the folder name, and the total unread in grey parentheses, e.g. `Search (702)`.
 - **Feeds:** a 16x16 favicon (or a generic square glyph if none), the feed title (truncate with an ellipsis), and unread count in grey parentheses `(42)`. Feeds with unread items are **bold**.
 - **Row:** `--row-h` high, 8px left padding, indented 16px per level.

@@ -7,7 +7,15 @@ from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from tributary.models import BoxCache, Feed, Item, Label, Pipe, Run, item_labels
+from tributary.models import (
+    BoxCache,
+    Feed,
+    Item,
+    Label,
+    Pipe,
+    Run,
+    item_labels,
+)
 
 EXPECTED_TABLES = {
     "box_cache",
@@ -17,6 +25,7 @@ EXPECTED_TABLES = {
     "labels",
     "pipes",
     "runs",
+    "search_cache",
 }
 
 

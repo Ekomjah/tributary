@@ -221,7 +221,13 @@ def refresh_feeds(
     """Refresh every subscribed feed, isolating failures per feed."""
 
     with session_factory() as session:
-        urls = list(session.scalars(select(Feed.url).order_by(Feed.id)).all())
+        urls = list(
+            session.scalars(
+                select(Feed.url)
+                .where(Feed.kind != "search")
+                .order_by(Feed.id)
+            ).all()
+        )
 
     if not urls:
         return []

@@ -9,6 +9,7 @@ export interface Feed {
   id: number;
   url: string;
   title: string;
+  kind: "feed" | "search";
   last_fetched: string | null;
   last_error: string | null;
   created_at: string;
@@ -27,6 +28,7 @@ export interface Item {
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
+  source: string | null;
   is_read: boolean;
   starred: boolean;
   decision: Decision | null;
