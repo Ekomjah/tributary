@@ -14,6 +14,8 @@ export interface Feed {
   created_at: string;
 }
 
+export type FetchStatus = "ok" | "empty" | "blocked" | "error";
+
 export interface Item {
   id: number;
   feed_id: number;
@@ -22,12 +24,22 @@ export interface Item {
   link: string | null;
   published: string | null;
   content: string;
+  content_full: string | null;
+  content_fetched_at: string | null;
+  fetch_status: FetchStatus | null;
   is_read: boolean;
   starred: boolean;
   decision: Decision | null;
   fetched_at: string;
   labels: Label[];
   summary: string | null;
+}
+
+export interface ArticleFetch {
+  id: number;
+  content_full: string | null;
+  content_fetched_at: string | null;
+  fetch_status: FetchStatus | null;
 }
 
 export interface ItemPage {

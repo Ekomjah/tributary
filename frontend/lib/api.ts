@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
 import type {
+  ArticleFetch,
   Feed,
   FeedRefreshResult,
   Item,
@@ -153,6 +154,14 @@ export const api = {
       url: "/api/items",
       params,
       signal: query.signal,
+    });
+  },
+
+  fetchItemArticle(itemId: number, force = false): Promise<ArticleFetch> {
+    return request<ArticleFetch>({
+      url: `/api/items/${itemId}/fetch`,
+      method: "POST",
+      params: force ? { force: true } : undefined,
     });
   },
 

@@ -3,9 +3,11 @@ import {
   Circle,
   CircleCheck,
   ExternalLink,
+  Loader2,
   Sparkles,
   Star,
   Tag,
+  TriangleAlert,
 } from "lucide-react";
 
 import LabelMenu from "@/components/label-menu";
@@ -16,7 +18,7 @@ import {
   plainText,
   readingMinutes,
 } from "@/lib/text";
-import type { Decision, Item, Label } from "@/lib/types";
+import type { Decision, FetchStatus, Item, Label } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface ArticleViewProps {
@@ -25,6 +27,7 @@ interface ArticleViewProps {
   feedCount: number;
   labels: Label[];
   contextLabel: string;
+  fetching: boolean;
   onBack: () => void;
   onToggleStar: (item: Item) => void;
   onToggleRead: (item: Item) => void;
@@ -33,12 +36,19 @@ interface ArticleViewProps {
   onSelectFeed: (feedId: number) => void;
 }
 
+const FAILURE_COPY: Record<Exclude<FetchStatus, "ok">, string> = {
+  blocked: "This page is paywalled or blocked automated readers.",
+  empty: "The page did not contain readable article text.",
+  error: "The page could not be reached.",
+};
+
 export default function ArticleView({
   item,
   feedName,
   feedCount,
   labels,
   contextLabel,
+  fetching,
   onBack,
   onToggleStar,
   onToggleRead,
@@ -46,9 +56,15 @@ export default function ArticleView({
   onToggleLabel,
   onSelectFeed,
 }: ArticleViewProps) {
-  const paragraphs = contentParagraphs(item.content);
-  const readingTime = readingMinutes(plainText(item.content));
+  const text = item.content_full ?? item.content;
+  const paragraphs = contentParagraphs(text);
+  const readingTime = readingMinutes(plainText(text));
   const published = item.published ?? item.fetched_at;
+  const fetchFailed =
+    item.content_full === null &&
+    item.fetch_status !== null &&
+    item.fetch_status !== "ok";
+  const waitingForText = fetching && item.content_full === null;
 
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4">
@@ -70,7 +86,18 @@ export default function ArticleView({
 
       <article className="pt-5">
         <h1 className="text-[26px] font-bold leading-[1.2] text-accent max-[700px]:text-[22px]">
-          {item.title || "Untitled"}
+          {item.link ? (
+            <a
+              href={item.link}
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-accent-dark hover:underline"
+            >
+              {item.title || "Untitled"}
+            </a>
+          ) : (
+            item.title || "Untitled"
+          )}
         </h1>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-divider pb-3 text-[11px] text-faint">
@@ -158,16 +185,58 @@ export default function ArticleView({
         </div>
 
         <div className="mt-6 max-w-[68ch] text-[15px] leading-[1.75] text-ink">
-          {paragraphs.length > 0 ? (
-            paragraphs.map((paragraph, index) => (
-              <p
-                key={`${item.id}-${index}`}
-                className="mb-4 whitespace-pre-line"
-              >
-                {paragraph}
+          {paragraphs.map((paragraph, index) => (
+            <p
+              key={`${item.id}-${index}`}
+              className="mb-4 whitespace-pre-line"
+            >
+              {paragraph}
+            </p>
+          ))}
+
+          {waitingForText && (
+            <p
+              role="status"
+              className="mb-4 flex items-center gap-2 text-[12px] text-muted"
+            >
+              <Loader2
+                className="size-3.5 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+              Fetching the full text…
+            </p>
+          )}
+
+          {fetchFailed && (
+            <div className="mb-4 border border-line bg-chrome px-4 py-3 text-[13px] leading-5 text-muted">
+              <p className="flex items-center gap-1.5 font-bold text-ink">
+                <TriangleAlert
+                  className="size-3.5 shrink-0 text-warn"
+                  aria-hidden="true"
+                />
+                Full text unavailable
               </p>
-            ))
-          ) : (
+              <p className="mt-1">
+                {FAILURE_COPY[item.fetch_status as Exclude<FetchStatus, "ok">]}
+                {item.link && (
+                  <>
+                    {" "}
+                    <a
+                      href={item.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-bold text-accent hover:underline"
+                    >
+                      Read it at the source
+                    </a>
+                    .
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+
+          {paragraphs.length === 0 && !waitingForText && !fetchFailed && (
             <div className="border border-line bg-chrome px-4 py-3 text-[13px] leading-5 text-muted">
               This feed didn’t send the article body.
               {item.link && (

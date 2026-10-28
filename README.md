@@ -12,6 +12,7 @@ Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to m
 
 - **Pipes.** Chain Fetch, Merge, Dedupe, Filter, Sort and Limit boxes. A pipe is a small JSON file you can save, share and edit by hand.
 - **Reader.** Unread/read, starred, labels and filters, with keyboard shortcuts (`j`/`k` to move, `s` to star, `m` to mark read).
+- **Full text.** When a feed sends only an excerpt, Tributary fetches the article once, cleans it with trafilatura, and keeps it for offline reading.
 - **Local first.** Feeds, stars and labels live in one SQLite file. The API and reader run on your machine. No accounts.
 - **Next:** local-model boxes for summaries and meaning-based filters, a natural-language search box backed by SerpAPI, read-aloud, and a visual pipe editor.
 
@@ -101,7 +102,8 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 ## Privacy
 
 - Your feeds, stars and labels stay on your machine in a local SQLite file.
-- Article text is not sent to a cloud service. The upcoming AI boxes will use the local Ollama instance.
+- When a feed only sends an excerpt, Tributary fetches the article page directly from the publisher, from your machine, the first time you open that item. The request carries Tributary's User-Agent and no account, cookies or reading history. The page is cleaned to text and cached in your local database.
+- Article text is not sent to a cloud service. The AI boxes use the local Ollama instance, and only extracted article text is sent to it.
 - Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs and feed metrics, but not article text, request bodies, headers, cookies, query strings, local variables or default PII.
 - The future natural-language search box will be off unless a SerpAPI key is configured. It will send only the query, never article text or reading history.
 

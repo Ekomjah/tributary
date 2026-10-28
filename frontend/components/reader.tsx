@@ -105,6 +105,9 @@ export default function Reader() {
   const [openItemId, setOpenItemId] = useState<number | null>(null);
 
   const [status, setStatus] = useState<StatusMessage | null>(null);
+  const [fetchingIds, setFetchingIds] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [addFeedOpen, setAddFeedOpen] = useState(false);
@@ -112,6 +115,7 @@ export default function Reader() {
 
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLElement>(null);
+  const inFlightFetches = useRef<Set<number>>(new Set());
 
   const showStatus = useCallback((message: string, error = false) => {
     setStatus({ message, error });
@@ -300,6 +304,40 @@ export default function Reader() {
     onError: showError,
   });
 
+  const { mutate: fetchArticle } = useMutation({
+    mutationFn: (itemId: number) => api.fetchItemArticle(itemId),
+    onMutate: (itemId) => {
+      inFlightFetches.current.add(itemId);
+      setFetchingIds((current) => new Set(current).add(itemId));
+    },
+    onSuccess: (fetched) => {
+      queryClient.setQueriesData<ItemPage>(
+        { queryKey: ["items"] },
+        (page) =>
+          page
+            ? {
+                ...page,
+                items: page.items.map((row) =>
+                  row.id === fetched.id ? { ...row, ...fetched } : row,
+                ),
+              }
+            : page,
+      );
+    },
+    onError: showError,
+    onSettled: (_data, _error, itemId) => {
+      inFlightFetches.current.delete(itemId);
+      setFetchingIds((current) => {
+        if (!current.has(itemId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(itemId);
+        return next;
+      });
+    },
+  });
+
   const { mutateAsync: toggleItemLabel } = useMutation({
     mutationFn: async ({
       item,
@@ -406,8 +444,15 @@ export default function Reader() {
       if (!item.is_read) {
         patchItem(item, { is_read: true });
       }
+      if (
+        !item.content_full &&
+        item.fetch_status === null &&
+        !inFlightFetches.current.has(item.id)
+      ) {
+        fetchArticle(item.id);
+      }
     },
-    [patchItem],
+    [fetchArticle, patchItem],
   );
 
   const toggleStar = useCallback(
@@ -953,6 +998,7 @@ export default function Reader() {
               feedCount={feedCounts[openArticle.feed_id] ?? 0}
               labels={labels}
               contextLabel={contextLabel}
+              fetching={fetchingIds.has(openArticle.id)}
               onBack={() => setOpenItemId(null)}
               onToggleStar={toggleStar}
               onToggleRead={toggleRead}

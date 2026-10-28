@@ -98,6 +98,20 @@ Each item is a **block with space around it**, not a bordered card:
 - 16px vertical space between items; a 1px `--divider` between groups.
 - **Keyboard:** `j`/`k` next/previous, `s` star, `m` mark read/unread, `o` or `Enter` open, `v` open original, `r` refresh. Show the focused item with a 3px `--blue` left border.
 
+## Content: the expanded item
+
+The reading view is one readable column (max 780px, 68ch for the body), not a card:
+
+- **Back bar:** `Back to <place>` at the left, a quiet `Esc` hint at the right, separated by a 1px `--divider`.
+- **Headline:** 26px bold `--blue`, and a link to the original article. Hover underlines it; it never changes color.
+- **Meta line:** the feed name as a bold `--blue` link with its unread count in parentheses, then the full date and an estimated reading time in `--text-3`. Label chips sit on the same line.
+- **Actions:** Star, Mark read/unread, Add label and an **Open original** link. These stay visible (no hover-only actions in the reading view). **Open original** is always shown, including when the article body is missing or blocked.
+- **Body:** 15px `--text`, 1.75 line height, paragraphs separated by 16px. Show extracted full text when present; otherwise fall back to the feed's excerpt.
+- **Fetching:** while full text is being fetched, keep the excerpt visible and add an inline spinner with `Fetching the full text…` at the end of the body.
+- **Unavailable:** a 1px `--border` box in `--chrome` with a warning triangle, the bold line **Full text unavailable**, one plain sentence (`paywalled or blocked`, `no readable text`, `could not be reached`) and a `Read it at the source` link.
+- **Empty:** when the feed sent no body and no fetch has run, show `This feed didn’t send the article body.` and the source link in the same box.
+- **Footer:** the Keep / Drop training signal and the keyboard hint, as in the list.
+
 ## Components
 
 **Primary button (the one red action):** `--red` fill, 1px `--red-dark` border, white bold 11px uppercase text, `--radius`, padding 8px 20px. Hover: `--red-dark` fill. Only one primary button per screen ("Add feed", "Run pipe").
