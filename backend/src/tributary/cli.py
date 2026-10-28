@@ -18,7 +18,7 @@ from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
 from .models import Feed, Item
 from .observability import init_sentry
-from .services import feeds, model
+from .services import feeds, model, refine
 from .services import search as web_search
 
 _SENTRY_READY = False
@@ -221,6 +221,13 @@ def search_web(
         int | None,
         typer.Option("--max-results", "-n", min=1, max=20, help="How many results to keep."),
     ] = None,
+    refine_query: Annotated[
+        bool,
+        typer.Option(
+            "--refine/--no-refine",
+            help="Rewrite the request into search keywords with the local model.",
+        ),
+    ] = True,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print the results as JSON."),
@@ -228,16 +235,28 @@ def search_web(
 ) -> None:
     """Search the web with SerpAPI and save the results as a search feed."""
     settings = _load_settings(db)
+    refined = None
+    if refine_query:
+        try:
+            refined = refine.refine_query(settings, query)
+        except web_search.SearchError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        params = refined.to_params(settings)
+        if max_results is not None:
+            params.max_results = min(max_results, 20)
+    else:
+        params = web_search.make_params(
+            settings,
+            query,
+            max_results=max_results,
+        )
+
     engine = create_engine(settings)
     try:
         init_db(engine)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
-            params = web_search.make_params(
-                settings,
-                query,
-                max_results=max_results,
-            )
             outcome = web_search.run_search(
                 session,
                 settings,
@@ -253,6 +272,20 @@ def search_web(
     finally:
         engine.dispose()
 
+    if refined is not None and json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "spec": refined.spec.model_dump(),
+                    "fallback": refined.fallback,
+                    "model": refined.model,
+                    "seconds": round(refined.seconds, 3),
+                },
+                ensure_ascii=False,
+            ),
+            err=True,
+        )
+
     if json_output:
         typer.echo(
             json.dumps(
@@ -267,6 +300,13 @@ def search_web(
         f"Search: {outcome.query!r} -> {outcome.params.q!r} "
         f"({outcome.params.engine}, {len(outcome.items)} result(s), {status})"
     )
+    if refined is not None:
+        note = (
+            " (local model unavailable, using your words)"
+            if refined.fallback
+            else f" via {refined.model}"
+        )
+        typer.echo(f"Refined: {outcome.params.q!r}{note}")
     for item in outcome.items:
         source = f" — {item.source}" if item.source else ""
         typer.echo(f"- {item.title}{source}")
