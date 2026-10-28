@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..models import Item, Label
-from ..schemas import Decision, ItemOut, ItemPage, ItemUpdate
+from ..schemas import ArticleFetchOut, Decision, ItemOut, ItemPage, ItemUpdate
+from ..services import articles
 from .deps import DbSession
 
 router = APIRouter(prefix="/items", tags=["items"])
@@ -33,7 +34,13 @@ def _item_query(
         stmt = stmt.where(Item.decision == decision)
     if q:
         pattern = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Item.title.ilike(pattern), Item.content.ilike(pattern)))
+        stmt = stmt.where(
+            or_(
+                Item.title.ilike(pattern),
+                Item.content.ilike(pattern),
+                Item.content_full.ilike(pattern),
+            )
+        )
     return stmt
 
 
@@ -76,6 +83,31 @@ def get_item(item_id: int, db: DbSession) -> Item:
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+@router.post("/{item_id}/fetch", response_model=ArticleFetchOut)
+def fetch_item_article(
+    item_id: int,
+    request: Request,
+    db: DbSession,
+    force: bool = False,
+) -> Item:
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    settings = request.app.state.settings
+    with articles.make_client(settings) as client:
+        articles.fetch_article(
+            db,
+            item,
+            settings=settings,
+            client=client,
+            force=force,
+        )
+    db.commit()
+    db.refresh(item)
     return item
 
 

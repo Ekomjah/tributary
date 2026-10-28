@@ -35,7 +35,12 @@ class FetchBox:
         errors: list[str] = []
 
         for url in self.urls:
-            result = feeds.fetch_feed(context.session, url, client=context.client)
+            result = feeds.fetch_feed(
+                context.session,
+                url,
+                client=context.client,
+                min_full_chars=context.settings.article_min_chars,
+            )
             if result.error:
                 errors.append(f"{result.url}: {result.error}")
                 continue

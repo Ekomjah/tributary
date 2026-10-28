@@ -63,7 +63,13 @@ def refresh_feed(feed_id: int, request: Request, db: DbSession) -> FeedRefreshOu
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    with feeds.make_client(request.app.state.settings) as client:
-        result = feeds.fetch_feed(db, feed.url, client=client)
+    settings = request.app.state.settings
+    with feeds.make_client(settings) as client:
+        result = feeds.fetch_feed(
+            db,
+            feed.url,
+            client=client,
+            min_full_chars=settings.article_min_chars,
+        )
     db.commit()
     return FeedRefreshOut.model_validate(result)

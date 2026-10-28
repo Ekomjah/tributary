@@ -56,7 +56,7 @@ def test_init_db_creates_the_database(tmp_path: Path) -> None:
 def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "cli.db"
 
-    def fake_fetch(session, url, *, client):
+    def fake_fetch(session, url, *, client, min_full_chars=500):
         return feeds.FetchResult(
             url=url,
             feed_id=1,
@@ -80,7 +80,7 @@ def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:
 def test_fetch_exits_nonzero_on_feed_errors(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "cli.db"
 
-    def fake_fetch(session, url, *, client):
+    def fake_fetch(session, url, *, client, min_full_chars=500):
         return feeds.FetchResult(url=url, error="HTTPStatusError: 404")
 
     monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)

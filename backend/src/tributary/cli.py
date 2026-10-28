@@ -152,7 +152,12 @@ def fetch(
             feeds.make_client(settings) as client,
             session_scope(factory) as session,
         ):
-            result = feeds.fetch_feed(session, url, client=client)
+            result = feeds.fetch_feed(
+                session,
+                url,
+                client=client,
+                min_full_chars=settings.article_min_chars,
+            )
     except Exception as exc:
         typer.echo(f"Could not fetch {url}: {exc}", err=True)
         raise typer.Exit(code=1) from exc

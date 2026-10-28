@@ -91,6 +91,7 @@ def fetch_feed(
     url: str,
     *,
     client: httpx.Client,
+    min_full_chars: int = 500,
 ) -> FetchResult:
     """Fetch one feed, store new items, and record the outcome.
 
@@ -102,7 +103,12 @@ def fetch_feed(
     started = time.perf_counter()
 
     with sentry_sdk.start_span(op="feed.fetch", name=canonical_url) as span:
-        result = _fetch_feed(session, canonical_url, client=client)
+        result = _fetch_feed(
+            session,
+            canonical_url,
+            client=client,
+            min_full_chars=min_full_chars,
+        )
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         span.set_data("feed.new_items", result.new_items)
@@ -115,7 +121,13 @@ def fetch_feed(
         return result
 
 
-def _fetch_feed(session: Session, url: str, *, client: httpx.Client) -> FetchResult:
+def _fetch_feed(
+    session: Session,
+    url: str,
+    *,
+    client: httpx.Client,
+    min_full_chars: int = 500,
+) -> FetchResult:
     feed = session.scalar(select(Feed).where(Feed.url == url))
     if feed is None:
         feed = Feed(url=url, title="")
@@ -172,6 +184,8 @@ def _fetch_feed(session: Session, url: str, *, client: httpx.Client) -> FetchRes
         if not guid or guid in existing_guids:
             continue
 
+        content = _entry_content(entry)
+        has_full_text = len(content.strip()) >= min_full_chars
         session.add(
             Item(
                 feed_id=feed.id,
@@ -179,7 +193,10 @@ def _fetch_feed(session: Session, url: str, *, client: httpx.Client) -> FetchRes
                 title=str(entry.get("title") or "")[:1000],
                 link=link,
                 published=_entry_published(entry),
-                content=_entry_content(entry),
+                content=content,
+                content_full=content if has_full_text else None,
+                fetch_status="ok" if has_full_text else None,
+                content_fetched_at=utcnow() if has_full_text else None,
                 fetched_at=utcnow(),
             )
         )
@@ -219,7 +236,14 @@ def refresh_feeds(
             for url in urls:
                 try:
                     with session_scope(session_factory) as session:
-                        results.append(fetch_feed(session, url, client=active_client))
+                        results.append(
+                            fetch_feed(
+                                session,
+                                url,
+                                client=active_client,
+                                min_full_chars=settings.article_min_chars,
+                            )
+                        )
                 except Exception as exc:
                     logger.exception("Unexpected error while refreshing %s", url)
                     results.append(FetchResult(url=url, error=_format_error(exc)))
