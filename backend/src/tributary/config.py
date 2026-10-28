@@ -53,6 +53,35 @@ class Settings(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("TRIBUTARY_FETCH_TIMEOUT", "FETCH_TIMEOUT"),
     )
+    article_timeout: float = Field(
+        default=15.0,
+        gt=0,
+        validation_alias=AliasChoices("TRIBUTARY_ARTICLE_TIMEOUT", "ARTICLE_TIMEOUT"),
+    )
+    article_max_bytes: int = Field(
+        default=2_000_000,
+        gt=0,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_MAX_BYTES",
+            "ARTICLE_MAX_BYTES",
+        ),
+    )
+    article_delay_seconds: float = Field(
+        default=1.0,
+        ge=0.0,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_DELAY",
+            "ARTICLE_DELAY",
+        ),
+    )
+    article_min_chars: int = Field(
+        default=500,
+        ge=1,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_MIN_CHARS",
+            "ARTICLE_MIN_CHARS",
+        ),
+    )
     user_agent: str = Field(
         default="Tributary/0.1 (+https://github.com/Ekomjah/tributary)",
         validation_alias=AliasChoices("TRIBUTARY_USER_AGENT", "USER_AGENT"),
