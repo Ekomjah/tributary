@@ -10,7 +10,10 @@ from tributary.cli import app
 from tributary.config import Settings
 from tributary.db import create_engine, create_session_factory, init_db, session_scope
 from tributary.models import Feed, Item
-from tributary.services import feeds
+from tributary.services import feeds, refine
+from tributary.services import search as web_search
+from tributary.services.refine import RefinementOutcome, SearchSpec
+from tributary.services.search import SearchOutcome
 
 runner = CliRunner()
 
@@ -206,6 +209,119 @@ def test_doctor_warns_when_the_model_is_missing(
 
     assert result.exit_code == 0
     assert "ollama pull gemma3:1b" in result.output
+
+
+def test_search_refines_and_shows_the_query(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+    monkeypatch.setenv("SERPAPI_API_KEY", "dummy")
+    refined = RefinementOutcome(
+        spec=SearchSpec(
+            q="AI regulation",
+            engine="google_news",
+            gl="us",
+            hl="en",
+            freshness="week",
+            max_results=6,
+        ),
+        fallback=False,
+        model="fake:1b",
+        seconds=0.2,
+    )
+    seen: dict[str, web_search.SearchParams] = {}
+
+    def fake_run_search(session, settings, params, **kwargs):
+        seen["params"] = params
+        return SearchOutcome(
+            query=str(kwargs.get("raw_query") or ""),
+            params=params,
+            items=[],
+            cached=False,
+            seconds=0.1,
+        )
+
+    monkeypatch.setattr(refine, "refine_query", lambda settings, query: refined)
+    monkeypatch.setattr(web_search, "run_search", fake_run_search)
+
+    result = runner.invoke(
+        app,
+        ["search", "AI regulation this week", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Refined: 'AI regulation'" in result.output
+    assert "via fake:1b" in result.output
+    assert seen["params"].q == "AI regulation"
+    assert seen["params"].freshness == "week"
+    assert seen["params"].max_results == 6
+
+
+def test_search_can_skip_refinement(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "cli.db"
+    monkeypatch.setenv("SERPAPI_API_KEY", "dummy")
+    seen: dict[str, web_search.SearchParams] = {}
+
+    def fail_refine(settings, query):
+        raise AssertionError("refinement should not run")
+
+    def fake_run_search(session, settings, params, **kwargs):
+        seen["params"] = params
+        return SearchOutcome(
+            query=str(kwargs.get("raw_query") or ""),
+            params=params,
+            items=[],
+            cached=False,
+            seconds=0.1,
+        )
+
+    monkeypatch.setattr(refine, "refine_query", fail_refine)
+    monkeypatch.setattr(web_search, "run_search", fake_run_search)
+
+    result = runner.invoke(
+        app,
+        ["search", "raw words", "--no-refine", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Refined:" not in result.output
+    assert seen["params"].q == "raw words"
+
+
+def test_search_json_keeps_refinement_metadata_on_stderr(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "cli.db"
+    monkeypatch.setenv("SERPAPI_API_KEY", "dummy")
+    refined = RefinementOutcome(
+        spec=SearchSpec(q="AI regulation", freshness="week", max_results=5),
+        fallback=True,
+        model="fake:1b",
+        seconds=0.3,
+    )
+
+    def fake_run_search(session, settings, params, **kwargs):
+        return SearchOutcome(
+            query=str(kwargs.get("raw_query") or ""),
+            params=params,
+            items=[],
+            cached=False,
+            seconds=0.1,
+        )
+
+    monkeypatch.setattr(refine, "refine_query", lambda settings, query: refined)
+    monkeypatch.setattr(web_search, "run_search", fake_run_search)
+
+    result = runner.invoke(
+        app,
+        ["search", "AI regulation this week", "--json", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    metadata = json.loads(result.stderr)
+    assert metadata["fallback"] is True
+    assert metadata["spec"]["q"] == "AI regulation"
+    assert metadata["model"] == "fake:1b"
 
 
 def test_run_executes_a_pipe_file(tmp_path: Path, monkeypatch) -> None:
