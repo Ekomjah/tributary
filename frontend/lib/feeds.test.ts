@@ -18,6 +18,7 @@ const FEEDS: Feed[] = [
     url: "https://example.com/feed",
     title: "Example",
     kind: "feed",
+    pipe_id: null,
     last_fetched: null,
     last_error: null,
     created_at: "2026-10-28T10:00:00Z",

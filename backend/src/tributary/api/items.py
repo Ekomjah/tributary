@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import Feed, Item, Label
+from ..models import Feed, Item, Label, pipe_feed_items
 from ..schemas import ArticleFetchOut, Decision, ItemOut, ItemPage, ItemUpdate
 from ..services import articles
 from .deps import DbSession
@@ -17,6 +17,7 @@ def _item_query(
     unread: bool | None,
     starred: bool | None,
     feed_id: int | None,
+    pipe_feed: bool,
     label: str | None,
     q: str | None,
     decision: Decision | None,
@@ -27,7 +28,15 @@ def _item_query(
     if starred is not None:
         stmt = stmt.where(Item.starred.is_(starred))
     if feed_id is not None:
-        stmt = stmt.where(Item.feed_id == feed_id)
+        if pipe_feed:
+            # A pipe feed is a view over existing items; membership and
+            # order live in the join table, not on ``Item.feed_id``.
+            stmt = stmt.join(
+                pipe_feed_items,
+                pipe_feed_items.c.item_id == Item.id,
+            ).where(pipe_feed_items.c.feed_id == feed_id)
+        else:
+            stmt = stmt.where(Item.feed_id == feed_id)
     else:
         # Search results live in virtual feeds. They show up under Searches,
         # not mixed into All items, Unread or Starred.
@@ -60,25 +69,31 @@ def list_items(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ItemPage:
+    feed = db.get(Feed, feed_id) if feed_id is not None else None
+    pipe_feed = feed is not None and feed.kind == "pipe"
     stmt = _item_query(
         unread=unread,
         starred=starred,
         feed_id=feed_id,
+        pipe_feed=pipe_feed,
         label=label,
         q=q,
         decision=decision,
     )
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    items = db.scalars(
-        stmt.order_by(
+    if pipe_feed:
+        ordering = (
+            pipe_feed_items.c.position.asc(),
+            Item.id.desc(),
+        )
+    else:
+        ordering = (
             Item.published.is_(None),
             Item.published.desc(),
             Item.fetched_at.desc(),
             Item.id.desc(),
         )
-        .limit(limit)
-        .offset(offset)
-    ).all()
+    items = db.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     return ItemPage(items=list(items), total=total, limit=limit, offset=offset)
 
 

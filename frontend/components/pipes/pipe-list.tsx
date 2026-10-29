@@ -40,7 +40,7 @@ export default function PipeList() {
           <h1 className="text-[20px] font-bold leading-tight">Pipes</h1>
           <p className="mt-1 max-w-[52ch] text-[13px] leading-5 text-muted">
             Chain boxes to gather, shape and understand a stream. Save a pipe,
-            then run it against your feeds whenever you need it.
+            then run it against your feeds or add it to the reader as a feed.
           </p>
         </div>
         <Button

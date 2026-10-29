@@ -242,6 +242,11 @@ export default function FeedsShell({
     return names;
   }, [feeds]);
 
+  const currentFeed = useMemo(
+    () => feeds.find((feed) => feed.id === scope.feedId) ?? null,
+    [feeds, scope.feedId],
+  );
+
   const counts = useMemo<Record<ItemView, number>>(
     () =>
       countsQuery.data?.views ?? {
@@ -482,7 +487,7 @@ export default function FeedsShell({
     onError: showError,
   });
 
-  const { mutate: runRefresh, isPending: refreshing } = useMutation({
+  const { mutate: runRefresh, isPending: refreshingAll } = useMutation({
     mutationFn: () => api.refreshFeeds(),
     onSuccess: (results) => {
       if (results.length === 0) {
@@ -512,6 +517,27 @@ export default function FeedsShell({
         );
       }
 
+      void queryClient.invalidateQueries();
+    },
+    onError: showError,
+  });
+
+  const { mutate: runPipeRefresh, isPending: refreshingPipe } = useMutation({
+    mutationFn: (feedId: number) => api.refreshFeed(feedId),
+    onSuccess: (result) => {
+      if (result.error) {
+        showStatus(
+          `“${result.title || "Pipe feed"}” did not refresh: ${result.error}`,
+          true,
+        );
+      } else {
+        showStatus(
+          `“${result.title || "Pipe feed"}” refreshed: ${plural(
+            result.new_items,
+            "item",
+          )}.`,
+        );
+      }
       void queryClient.invalidateQueries();
     },
     onError: showError,
@@ -565,10 +591,24 @@ export default function FeedsShell({
   );
 
   const refreshAll = useCallback(() => {
-    if (!refreshing) {
+    if (currentFeed?.kind === "pipe") {
+      if (!refreshingPipe) {
+        runPipeRefresh(currentFeed.id);
+      }
+      return;
+    }
+    if (!refreshingAll) {
       runRefresh();
     }
-  }, [refreshing, runRefresh]);
+  }, [
+    currentFeed,
+    refreshingAll,
+    refreshingPipe,
+    runPipeRefresh,
+    runRefresh,
+  ]);
+
+  const refreshing = refreshingAll || refreshingPipe;
 
   const submitFeed = useCallback(
     async (url: string) => {
@@ -634,7 +674,9 @@ export default function FeedsShell({
         showStatus(
           feed.kind === "search"
             ? `Removed “${name}”.`
-            : `Deleted “${name}” and its articles.`,
+            : feed.kind === "pipe"
+              ? `Removed “${name}” from the reader.`
+              : `Deleted “${name}” and its articles.`,
         );
 
         const nextScope = scopeAfterFeedDelete(scope, feed.id);

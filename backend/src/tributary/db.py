@@ -91,6 +91,14 @@ _ITEM_COLUMNS: dict[str, str] = {
 
 _FEED_COLUMNS: dict[str, str] = {
     "kind": "VARCHAR(16) NOT NULL DEFAULT 'feed'",
+    "pipe_id": "INTEGER",
+}
+
+_RUN_COLUMNS: dict[str, str] = {
+    "steps_json": "TEXT NOT NULL DEFAULT '[]'",
+    "item_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+    "error_step": "INTEGER",
+    "error_box": "VARCHAR(50)",
 }
 
 
@@ -102,6 +110,20 @@ def _migrate_feeds(engine: Engine) -> None:
         for name, ddl in _FEED_COLUMNS.items():
             if name not in existing:
                 connection.exec_driver_sql(f"ALTER TABLE feeds ADD COLUMN {name} {ddl}")
+        # ``create_all`` cannot add a unique constraint to an existing table.
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_feeds_pipe_id ON feeds(pipe_id)"
+        )
+
+
+def _migrate_runs(engine: Engine) -> None:
+    """Add run snapshots to an existing SQLite database."""
+
+    with engine.begin() as connection:
+        existing = {str(row[1]) for row in connection.exec_driver_sql("PRAGMA table_info(runs)")}
+        for name, ddl in _RUN_COLUMNS.items():
+            if name not in existing:
+                connection.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {name} {ddl}")
 
 
 def _migrate_items(engine: Engine) -> None:
@@ -125,6 +147,7 @@ def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _migrate_feeds(engine)
     _migrate_items(engine)
+    _migrate_runs(engine)
 
 
 @contextmanager

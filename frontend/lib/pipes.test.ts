@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   defaultStep,
   graphToSteps,
+  stepHint,
   stepsToGraph,
   validateStep,
+  withArticle,
   type BoxNode,
 } from "./pipes";
-import type { PipeStep } from "./types";
+import type { ArticleFetch, Item, PipeStep } from "./types";
 
 const STEPS: PipeStep[] = [
   { box: "fetch", urls: ["https://hnrss.org/frontpage"] },
@@ -245,5 +247,115 @@ describe("defaultStep", () => {
       const step = defaultStep(type);
       expect(step.box).toBe(type);
     }
+  });
+});
+
+describe("stepHint", () => {
+  it("describes boxes that add items", () => {
+    expect(
+      stepHint({ box: "fetch", items_in: 0, items_out: 12 }),
+    ).toBe("added 12");
+  });
+
+  it("describes boxes that drop items", () => {
+    expect(
+      stepHint({ box: "filter", items_in: 12, items_out: 3 }),
+    ).toBe("dropped 9");
+  });
+
+  it("flags an empty result", () => {
+    expect(stepHint({ box: "fetch", items_in: 0, items_out: 0 })).toBe(
+      "no items out",
+    );
+    expect(
+      stepHint({ box: "filter", items_in: 8, items_out: 0 }),
+    ).toBe("dropped 8");
+  });
+
+  it("flags a source that adds nothing", () => {
+    expect(
+      stepHint({ box: "search", items_in: 8, items_out: 8 }),
+    ).toBe("no new items");
+    expect(stepHint({ box: "fetch", items_in: 8, items_out: 8 })).toBe(
+      "no new items",
+    );
+  });
+
+  it("stays quiet for pass-through boxes", () => {
+    expect(
+      stepHint({ box: "fulltext", items_in: 5, items_out: 5 }),
+    ).toBeNull();
+    expect(
+      stepHint({ box: "summarize", items_in: 5, items_out: 5 }),
+    ).toBeNull();
+  });
+});
+
+describe("withArticle", () => {
+  const item: Item = {
+    id: 7,
+    feed_id: 2,
+    guid: "guid-7",
+    title: "A useful article",
+    link: "https://example.com/a",
+    published: null,
+    content: "Feed excerpt",
+    content_html: null,
+    author: "Feed Author",
+    cover_image: "https://example.com/feed-cover.jpg",
+    cover_image_alt: "Feed cover",
+    cover_caption: null,
+    content_full: null,
+    content_fetched_at: null,
+    fetch_status: null,
+    source: "Example",
+    is_read: false,
+    starred: false,
+    decision: null,
+    fetched_at: "2026-01-01T00:00:00Z",
+    labels: [],
+    summary: "A short summary.",
+    why_care: "It matches your interests.",
+  };
+
+  const article: ArticleFetch = {
+    id: 7,
+    content_html: "<p>Full article</p>",
+    author: "Jane Doe",
+    cover_image: "https://example.com/article-cover.jpg",
+    cover_image_alt: "Article cover",
+    cover_caption: "The cover caption.",
+    content_full: "Full article",
+    content_fetched_at: "2026-01-02T00:00:00Z",
+    fetch_status: "ok",
+  };
+
+  it("merges the fetched article without losing item state", () => {
+    const updated = withArticle(item, article);
+
+    expect(updated.content_full).toBe("Full article");
+    expect(updated.content_html).toBe("<p>Full article</p>");
+    expect(updated.author).toBe("Jane Doe");
+    expect(updated.cover_image).toBe("https://example.com/article-cover.jpg");
+    expect(updated.cover_image_alt).toBe("Article cover");
+    expect(updated.cover_caption).toBe("The cover caption.");
+    expect(updated.fetch_status).toBe("ok");
+    expect(updated.content_fetched_at).toBe("2026-01-02T00:00:00Z");
+    expect(updated.title).toBe(item.title);
+    expect(updated.summary).toBe(item.summary);
+    expect(updated.why_care).toBe(item.why_care);
+    expect(updated.labels).toBe(item.labels);
+  });
+
+  it("records a failed fetch", () => {
+    const updated = withArticle(item, {
+      ...article,
+      content_html: null,
+      content_full: null,
+      fetch_status: "blocked",
+    });
+
+    expect(updated.content_full).toBeNull();
+    expect(updated.fetch_status).toBe("blocked");
   });
 });

@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "item_labels",
     "items",
     "labels",
+    "pipe_feed_items",
     "pipes",
     "runs",
     "search_cache",

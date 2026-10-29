@@ -141,7 +141,8 @@ export default function Sidebar({
   onAddLabel,
   onDeleteFeed,
 }: SidebarProps) {
-  const subscriptions = feeds.filter((feed) => feed.kind !== "search");
+  const subscriptions = feeds.filter((feed) => feed.kind === "feed");
+  const pipeFeeds = feeds.filter((feed) => feed.kind === "pipe");
   const searches = feeds.filter((feed) => feed.kind === "search");
 
   return (
@@ -219,6 +220,37 @@ export default function Sidebar({
                   deleteLabel={`Delete ${feed.title || feed.url}`}
                 >
                   {feed.title || feed.url}
+                </Row>
+              ))
+            )}
+          </div>
+        </section>
+
+        <div className="my-2 border-t border-divider" />
+
+        <section aria-labelledby="sidebar-pipe-feeds">
+          <SectionTitle>
+            <span id="sidebar-pipe-feeds">Pipe feeds</span>
+          </SectionTitle>
+
+          <div className="flex flex-col">
+            {pipeFeeds.length === 0 ? (
+              <p className="px-2 py-1 text-[12px] text-faint">
+                Add one from a pipe.
+              </p>
+            ) : (
+              pipeFeeds.map((feed) => (
+                <Row
+                  key={feed.id}
+                  active={feedId === feed.id}
+                  icon={Workflow}
+                  count={feedCounts[feed.id] ?? 0}
+                  title={feed.url}
+                  onClick={() => onSelectFeed(feed.id)}
+                  onDelete={() => onDeleteFeed(feed)}
+                  deleteLabel={`Remove ${feed.title || feed.url} from the reader`}
+                >
+                  {feed.title || "Pipe feed"}
                 </Row>
               ))
             )}

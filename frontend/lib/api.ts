@@ -11,7 +11,9 @@ import type {
   ItemUpdate,
   Label,
   Pipe,
+  PipeFeedResult,
   PipeRun,
+  PipeRunRecord,
   PipeSpec,
   SearchRefinement,
 } from "./types";
@@ -147,6 +149,14 @@ export const api = {
     });
   },
 
+  addPipeFeed(pipeId: number): Promise<PipeFeedResult> {
+    return request<PipeFeedResult>({
+      url: "/api/feeds/pipe",
+      method: "POST",
+      data: { pipe_id: pipeId },
+    });
+  },
+
   listItems(query: ItemQuery = {}): Promise<ItemPage> {
     const params: Record<string, string | number | boolean> = {};
     if (query.unread !== undefined) {
@@ -261,10 +271,34 @@ export const api = {
     });
   },
 
-  runPipe(pipeId: number): Promise<PipeRun> {
-    return request<PipeRun>({
-      url: `/api/pipes/${pipeId}/run`,
+  startPipeRun(pipeId: number): Promise<PipeRunRecord> {
+    return request<PipeRunRecord>({
+      url: `/api/pipes/${pipeId}/runs`,
       method: "POST",
+    });
+  },
+
+  getRun(runId: number): Promise<PipeRunRecord> {
+    return request<PipeRunRecord>({
+      url: `/api/runs/${runId}`,
+    });
+  },
+
+  listPipeRuns(
+    pipeId: number,
+    limit = 20,
+    signal?: AbortSignal,
+  ): Promise<PipeRunRecord[]> {
+    return request<PipeRunRecord[]>({
+      url: "/api/runs",
+      params: { pipe_id: pipeId, limit },
+      signal,
+    });
+  },
+
+  getPipeRun(runId: number): Promise<PipeRun> {
+    return request<PipeRun>({
+      url: `/api/runs/${runId}/results`,
     });
   },
 

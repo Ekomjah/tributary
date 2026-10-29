@@ -4,7 +4,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from ..models import Feed
+from ..models import Feed, Pipe
 from ..schemas import (
     FeedAddOut,
     FeedCandidateOut,
@@ -13,8 +13,10 @@ from ..schemas import (
     FeedDiscoveryOut,
     FeedOut,
     FeedRefreshOut,
+    PipeFeedCreate,
+    PipeFeedOut,
 )
-from ..services import discovery, feeds
+from ..services import discovery, feeds, pipe_feeds
 from ..services.urls import UnsafeUrlError
 from .deps import DbSession
 
@@ -73,6 +75,38 @@ def create_feed(payload: FeedCreate, request: Request, db: DbSession) -> FeedAdd
     return FeedAddOut(
         feed=FeedOut.model_validate(feed),
         result=FeedRefreshOut.model_validate(result),
+    )
+
+
+@router.post("/pipe", response_model=PipeFeedOut)
+def add_pipe_feed(payload: PipeFeedCreate, request: Request, db: DbSession) -> PipeFeedOut:
+    """Run a saved pipe and add its output to the reader as a feed."""
+
+    pipe = db.get(Pipe, payload.pipe_id)
+    if pipe is None:
+        raise HTTPException(status_code=404, detail="Pipe not found")
+
+    settings = request.app.state.settings
+    with feeds.make_client(settings) as client:
+        result = pipe_feeds.add_pipe_feed(
+            db,
+            pipe,
+            settings=settings,
+            client=client,
+        )
+
+    if result.feed is None:
+        raise HTTPException(
+            status_code=502,
+            detail=result.error or "That pipe could not run.",
+        )
+
+    return PipeFeedOut(
+        feed=FeedOut.model_validate(result.feed),
+        created=result.created,
+        items=result.items,
+        seconds=result.seconds,
+        error=result.error,
     )
 
 
@@ -139,6 +173,29 @@ def refresh_feed(feed_id: int, request: Request, db: DbSession) -> FeedRefreshOu
         )
 
     settings = request.app.state.settings
+    if feed.kind == "pipe":
+        with feeds.make_client(settings) as client:
+            pipe_result = pipe_feeds.refresh_pipe_feed(
+                db,
+                feed,
+                settings=settings,
+                client=client,
+            )
+        if pipe_result.feed is None:
+            raise HTTPException(
+                status_code=502,
+                detail=pipe_result.error or "That pipe could not run.",
+            )
+        return FeedRefreshOut(
+            url=pipe_result.feed.url,
+            feed_id=pipe_result.feed.id,
+            title=pipe_result.feed.title,
+            kind="pipe",
+            new_items=pipe_result.items,
+            total_entries=pipe_result.items,
+            error=pipe_result.error,
+        )
+
     with feeds.make_client(settings) as client:
         result = feeds.fetch_feed(
             db,

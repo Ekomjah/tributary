@@ -1,6 +1,13 @@
 import type { Edge, Node } from "@xyflow/react";
 
-import type { PipeStep, SearchFreshness, SearchStep } from "./types";
+import type {
+  ArticleFetch,
+  BoxRun,
+  Item,
+  PipeStep,
+  SearchFreshness,
+  SearchStep,
+} from "./types";
 
 export type BoxType = PipeStep["box"];
 
@@ -466,6 +473,45 @@ export function searchPreviewLabel(step: SearchStep): string {
 
 export function stepLabel(step: PipeStep): string {
   return boxDefinition(step.box).label;
+}
+
+/**
+ * Explain how a box changed the stream, so a run is readable without opening
+ * every result. Counts are deliberately left out when the box is a pass-through.
+ */
+export function stepHint(
+  step: Pick<BoxRun, "box" | "items_in" | "items_out">,
+): string | null {
+  if (step.items_out > step.items_in) {
+    return `added ${step.items_out - step.items_in}`;
+  }
+  if (step.items_out < step.items_in) {
+    return `dropped ${step.items_in - step.items_out}`;
+  }
+  if (step.items_out === 0) {
+    return "no items out";
+  }
+  if (step.box === "fetch" || step.box === "search") {
+    // A source that adds nothing usually means it was skipped or returned
+    // only items that were already in the stream.
+    return "no new items";
+  }
+  return null;
+}
+
+/** Apply the article-fetch response to an item returned by a pipe run. */
+export function withArticle(item: Item, article: ArticleFetch): Item {
+  return {
+    ...item,
+    content_html: article.content_html,
+    author: article.author,
+    cover_image: article.cover_image,
+    cover_image_alt: article.cover_image_alt,
+    cover_caption: article.cover_caption,
+    content_full: article.content_full,
+    content_fetched_at: article.content_fetched_at,
+    fetch_status: article.fetch_status,
+  };
 }
 
 export function freshnessOptions(): readonly SearchFreshness[] {

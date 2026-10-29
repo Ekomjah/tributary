@@ -53,6 +53,7 @@ export default function DeleteFeedDialog({
 
   const name = feed ? feed.title || feed.url : "";
   const isSearch = feed?.kind === "search";
+  const isPipe = feed?.kind === "pipe";
 
   return (
     <Dialog
@@ -70,13 +71,24 @@ export default function DeleteFeedDialog({
     >
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>{isSearch ? "Delete search?" : "Delete feed?"}</DialogTitle>
+          <DialogTitle>
+            {isSearch
+              ? "Delete search?"
+              : isPipe
+                ? "Remove from reader?"
+                : "Delete feed?"}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="px-4 py-4">
           <DialogDescription>
             {isSearch ? (
               <>“{name}” will be removed from Tributary. This can’t be undone.</>
+            ) : isPipe ? (
+              <>
+                “{name}” will be removed from the reader. The pipe and its past
+                runs stay available in Pipes.
+              </>
             ) : (
               <>
                 “{name}” and all articles saved from it will be removed from
@@ -119,7 +131,11 @@ export default function DeleteFeedDialog({
             ) : (
               <Trash2 aria-hidden="true" />
             )}
-            {busy ? "Deleting…" : isSearch ? "Delete search" : "Delete feed"}
+            {busy ? "Deleting…" : isSearch
+              ? "Delete search"
+              : isPipe
+                ? "Remove from reader"
+                : "Delete feed"}
           </Button>
         </DialogFooter>
       </DialogContent>

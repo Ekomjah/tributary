@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,9 @@ from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
 from .observability import init_sentry
 from .schemas import HealthOut
+from .services import pipe_runs
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,6 +29,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = resolved_settings
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
+        reaped = pipe_runs.reap_interrupted_runs(app.state.session_factory)
+        if reaped:
+            logger.warning("Marked %d interrupted pipe run(s) as failed", reaped)
         try:
             yield
         finally:

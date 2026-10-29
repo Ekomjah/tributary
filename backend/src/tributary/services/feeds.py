@@ -465,7 +465,7 @@ def refresh_feeds(
 
     with session_factory() as session:
         urls = list(
-            session.scalars(select(Feed.url).where(Feed.kind != "search").order_by(Feed.id)).all()
+            session.scalars(select(Feed.url).where(Feed.kind == "feed").order_by(Feed.id)).all()
         )
 
     if not urls:

@@ -7,7 +7,7 @@ import sentry_sdk
 
 from ..schemas import ItemOut
 from .ai import MeaningFilterBox, SummarizeBox, WhyCareBox
-from .base import Box, RunContext
+from .base import Box, BoxError, RunContext
 from .plain import (
     DedupeBox,
     FetchBox,
@@ -33,7 +33,7 @@ from .spec import (
     WhyCareStep,
 )
 
-__all__ = ["BoxRun", "PipeRunResult", "run_pipe"]
+__all__ = ["BoxRun", "PipeRunError", "PipeRunResult", "run_pipe"]
 
 
 @dataclass(slots=True)
@@ -42,6 +42,26 @@ class BoxRun:
     seconds: float
     items_in: int
     items_out: int
+    status: str = "success"
+    error: str | None = None
+
+
+class PipeRunError(BoxError):
+    """A step failed, carrying the steps completed before it."""
+
+    def __init__(
+        self,
+        *,
+        step_index: int,
+        box: str,
+        steps: list[BoxRun],
+        cause: BaseException,
+    ) -> None:
+        self.step_index = step_index
+        self.box = box
+        self.steps = steps
+        self.cause = cause
+        super().__init__(f"{box} step failed: {type(cause).__name__}: {cause}")
 
 
 @dataclass(slots=True)
@@ -118,9 +138,22 @@ def run_pipe(
             span.set_data("pipe.items.in", in_count)
             try:
                 items = box.run(items, context)
-            except Exception:
+            except Exception as exc:
                 span.set_status("internal_error")
-                raise
+                failed = BoxRun(
+                    box=step.box,
+                    seconds=time.perf_counter() - step_started,
+                    items_in=in_count,
+                    items_out=0,
+                    status="error",
+                    error=f"{type(exc).__name__}: {exc}"[:2000],
+                )
+                raise PipeRunError(
+                    step_index=index,
+                    box=step.box,
+                    steps=[*steps, failed],
+                    cause=exc,
+                ) from exc
             span.set_data("pipe.items.out", len(items))
 
         steps.append(

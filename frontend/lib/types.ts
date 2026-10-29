@@ -5,11 +5,14 @@ export interface Label {
   name: string;
 }
 
+export type FeedKind = "feed" | "search" | "pipe";
+
 export interface Feed {
   id: number;
   url: string;
   title: string;
-  kind: "feed" | "search";
+  kind: FeedKind;
+  pipe_id: number | null;
   last_fetched: string | null;
   last_error: string | null;
   created_at: string;
@@ -90,9 +93,18 @@ export interface FeedRefreshResult {
   url: string;
   feed_id: number | null;
   title: string;
+  kind: FeedKind;
   new_items: number;
   total_entries: number;
   not_modified: boolean;
+  error: string | null;
+}
+
+export interface PipeFeedResult {
+  feed: Feed;
+  created: boolean;
+  items: number;
+  seconds: number;
   error: string | null;
 }
 
@@ -191,6 +203,8 @@ export interface BoxRun {
   seconds: number;
   items_in: number;
   items_out: number;
+  status: "success" | "error";
+  error: string | null;
 }
 
 export interface PipeRunRecord {
@@ -200,6 +214,8 @@ export interface PipeRunRecord {
   seconds: number | null;
   status: "running" | "success" | "error";
   error: string | null;
+  error_step: number | null;
+  error_box: string | null;
   result_count: number;
 }
 

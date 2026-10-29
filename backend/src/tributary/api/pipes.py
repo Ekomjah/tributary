@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import time
-
-import sentry_sdk
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from ..boxes import BoxRun, PipeSpec, RunContext, run_pipe
-from ..models import Pipe, Run
-from ..schemas import BoxRunOut, PipeCreate, PipeOut, PipeRunOut, PipeUpdate, RunOut
-from ..services import feeds
+from ..boxes import PipeSpec
+from ..models import Feed, Pipe, Run
+from ..schemas import PipeCreate, PipeOut, PipeRunOut, PipeUpdate, RunOut
+from ..services import pipe_runs
 from .deps import AppSettings, DbSession
 
 router = APIRouter(prefix="/pipes", tags=["pipes"])
@@ -51,6 +48,9 @@ def update_pipe(pipe_id: int, payload: PipeUpdate, db: DbSession) -> Pipe:
     fields = payload.model_fields_set
     if "name" in fields and payload.name is not None:
         pipe.name = payload.name.strip()[:200]
+        linked_feed = db.scalar(select(Feed).where(Feed.pipe_id == pipe.id))
+        if linked_feed is not None:
+            linked_feed.title = pipe.name[:500]
     if "spec_json" in fields and payload.spec_json is not None:
         _validate_spec(payload.spec_json)
         pipe.spec_json = payload.spec_json
@@ -65,9 +65,41 @@ def delete_pipe(pipe_id: int, db: DbSession) -> Response:
     pipe = db.get(Pipe, pipe_id)
     if pipe is None:
         raise HTTPException(status_code=404, detail="Pipe not found")
+    # Older SQLite databases have no ON DELETE CASCADE on feeds.pipe_id, so
+    # remove the reader feed explicitly before the pipe row goes away.
+    linked_feed = db.scalar(select(Feed).where(Feed.pipe_id == pipe.id))
+    if linked_feed is not None:
+        db.delete(linked_feed)
     db.delete(pipe)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{pipe_id}/runs",
+    response_model=RunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_pipe_run(
+    pipe_id: int,
+    request: Request,
+    db: DbSession,
+    settings: AppSettings,
+) -> Run:
+    """Start a pipe run on a worker and return the running record."""
+
+    pipe = db.get(Pipe, pipe_id)
+    if pipe is None:
+        raise HTTPException(status_code=404, detail="Pipe not found")
+
+    run = pipe_runs.begin_run(db, pipe.id)
+    pipe_runs.launch_run(
+        request.app.state.session_factory,
+        settings,
+        pipe.id,
+        run.id,
+    )
+    return run
 
 
 @router.post("/{pipe_id}/run", response_model=PipeRunOut)
@@ -80,52 +112,17 @@ def run_saved_pipe(
     if pipe is None:
         raise HTTPException(status_code=404, detail="Pipe not found")
 
-    spec = _validate_spec(pipe.spec_json)
-    run = Run(pipe_id=pipe.id, status="running")
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    run_id = run.id
-    started = time.perf_counter()
-
-    try:
-        with feeds.make_client(settings) as client:
-            result = run_pipe(
-                spec,
-                RunContext(session=db, settings=settings, client=client),
-            )
-        run = db.get(Run, run_id)
-        if run is None:  # pragma: no cover - the row was just committed
-            raise RuntimeError("Run record disappeared")
-        run.status = "success"
-        run.seconds = time.perf_counter() - started
-        run.result_count = len(result.items)
-        db.commit()
-        db.refresh(run)
-    except Exception as exc:
-        db.rollback()
-        run = db.get(Run, run_id)
-        if run is not None:
-            run.status = "error"
-            run.seconds = time.perf_counter() - started
-            run.error = f"{type(exc).__name__}: {exc}"[:4000]
-            db.commit()
-        sentry_sdk.capture_exception(exc)
-        raise HTTPException(status_code=422, detail=f"Pipe failed: {exc}") from exc
+    execution = pipe_runs.execute_pipe(db, settings, pipe)
+    if execution.error or execution.run is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Pipe failed: {execution.error}",
+        )
 
     return PipeRunOut(
-        run=RunOut.model_validate(run),
-        items=result.items,
-        steps=[_box_run_out(step) for step in result.steps],
-    )
-
-
-def _box_run_out(step: BoxRun) -> BoxRunOut:
-    return BoxRunOut(
-        box=step.box,
-        seconds=step.seconds,
-        items_in=step.items_in,
-        items_out=step.items_out,
+        run=RunOut.model_validate(execution.run),
+        items=execution.items,
+        steps=execution.steps,
     )
 
 

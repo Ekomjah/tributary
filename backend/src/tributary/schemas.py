@@ -40,6 +40,7 @@ class FeedOut(ORMModel):
     url: str
     title: str
     kind: str = "feed"
+    pipe_id: int | None = None
     last_fetched: datetime | None = None
     last_error: str | None = None
     created_at: datetime
@@ -51,6 +52,7 @@ class FeedRefreshOut(BaseModel):
     url: str
     feed_id: int | None = None
     title: str = ""
+    kind: str = "feed"
     new_items: int = 0
     total_entries: int = 0
     not_modified: bool = False
@@ -60,6 +62,18 @@ class FeedRefreshOut(BaseModel):
 class FeedAddOut(BaseModel):
     feed: FeedOut
     result: FeedRefreshOut
+
+
+class PipeFeedCreate(BaseModel):
+    pipe_id: int = Field(gt=0)
+
+
+class PipeFeedOut(BaseModel):
+    feed: FeedOut
+    created: bool
+    items: int
+    seconds: float
+    error: str | None = None
 
 
 class FeedDiscoverRequest(BaseModel):
@@ -182,6 +196,8 @@ class RunOut(ORMModel):
     seconds: float | None = None
     status: str
     error: str | None = None
+    error_step: int | None = None
+    error_box: str | None = None
     result_count: int
 
 
@@ -190,9 +206,17 @@ class BoxRunOut(BaseModel):
     seconds: float
     items_in: int
     items_out: int
+    status: Literal["success", "error"] = "success"
+    error: str | None = None
 
 
 class PipeRunOut(BaseModel):
+    run: RunOut
+    items: list[ItemOut]
+    steps: list[BoxRunOut]
+
+
+class RunResultsOut(BaseModel):
     run: RunOut
     items: list[ItemOut]
     steps: list[BoxRunOut]

@@ -15,8 +15,10 @@ import {
 } from "@xyflow/react";
 import {
   ArrowLeft,
+  History,
   Loader2,
   Play,
+  Rss,
   Save,
   Trash2,
   TriangleAlert,
@@ -33,12 +35,13 @@ import {
   type BoxNode,
   type BoxType,
 } from "@/lib/pipes";
-import type { Pipe, PipeRun, PipeSpec } from "@/lib/types";
+import type { BoxRun, Pipe, PipeRun, PipeSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import BoxPalette from "./box-palette";
 import PipeCanvas from "./pipe-canvas";
 import { PipeGraphProvider } from "./pipe-context";
+import RunHistory from "./run-history";
 import RunPanel from "./run-panel";
 
 interface Banner {
@@ -59,6 +62,10 @@ function messageOf(error: unknown): string {
     return error.message;
   }
   return "Something went wrong.";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function tailOf(nodes: BoxNode[], edges: BoxEdge[]): BoxNode | null {
@@ -107,9 +114,19 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PipeRun | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [addingToReader, setAddingToReader] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const activeId = pipeId ?? savedId;
   const loadedId = useRef<number | null>(null);
+  const runToken = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      // Invalidate any in-flight poll when the editor unmounts.
+      runToken.current += 1;
+    };
+  }, []);
 
   const pipeQuery = useQuery({
     queryKey: ["pipe", pipeId],
@@ -158,6 +175,13 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  const markDirty = useCallback(() => {
+    setDirty(true);
+    // A result from the previous spec is stale as soon as the graph changes.
+    setResult(null);
+    setRunError(null);
+  }, []);
+
   const updateStep = useCallback(
     (nodeId: string, step: BoxNode["data"]["step"]) => {
       setNodes((current) =>
@@ -167,9 +191,9 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
             : node,
         ),
       );
-      setDirty(true);
+      markDirty();
     },
-    [setNodes],
+    [markDirty, setNodes],
   );
 
   const actions = useMemo(() => ({ updateStep }), [updateStep]);
@@ -206,30 +230,30 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
         );
       }
 
-      setDirty(true);
+      markDirty();
       setBanner(null);
     },
-    [edges, nodes, setEdges, setNodes],
+    [edges, markDirty, nodes, setEdges, setNodes],
   );
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<BoxNode>[]) => {
       onNodesChange(changes);
       if (changes.some((change) => change.type === "remove")) {
-        setDirty(true);
+        markDirty();
       }
     },
-    [onNodesChange],
+    [markDirty, onNodesChange],
   );
 
   const handleEdgesChange = useCallback(
     (changes: EdgeChange<BoxEdge>[]) => {
       onEdgesChange(changes);
       if (changes.some((change) => change.type === "remove")) {
-        setDirty(true);
+        markDirty();
       }
     },
-    [onEdgesChange],
+    [markDirty, onEdgesChange],
   );
 
   const handleConnect = useCallback(
@@ -244,10 +268,10 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
           current,
         ),
       );
-      setDirty(true);
+      markDirty();
       setBanner(null);
     },
-    [setEdges],
+    [markDirty, setEdges],
   );
 
   const save = useCallback(async (): Promise<SavedPipe | null> => {
@@ -300,10 +324,60 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
     void save();
   }, [save]);
 
+  const pollRun = useCallback(
+    async (runId: number, token: number): Promise<PipeRun | null> => {
+      let results = await api.getPipeRun(runId);
+      while (results.run.status === "running") {
+        await sleep(1000);
+        if (runToken.current !== token) {
+          return null;
+        }
+        results = await api.getPipeRun(runId);
+      }
+      return results;
+    },
+    [],
+  );
+
+  const applyRunToNodes = useCallback(
+    (nodeIds: string[], steps: BoxRun[]) => {
+      const byId = new Map(nodeIds.map((id, index) => [id, steps[index]]));
+      setNodes((current) =>
+        current.map((node) => {
+          const step = byId.get(node.id);
+          if (!step) {
+            return node.data.run
+              ? { ...node, data: { ...node.data, run: undefined } }
+              : node;
+          }
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              run: {
+                status:
+                  step.status === "error"
+                    ? ("error" as const)
+                    : step.seconds > 2
+                      ? ("slow" as const)
+                      : ("done" as const),
+                seconds: step.seconds,
+                itemsOut: step.items_out,
+              },
+            },
+          };
+        }),
+      );
+    },
+    [setNodes],
+  );
+
   const handleRun = useCallback(async () => {
     setRunning(true);
     setRunError(null);
     setResult(null);
+    const token = runToken.current + 1;
+    runToken.current = token;
     try {
       const saved = await save();
       if (!saved) {
@@ -317,47 +391,139 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
         })),
       );
 
-      const run = await api.runPipe(saved.pipe.id);
-      setResult(run);
-      setBanner({ message: `Ran “${saved.pipe.name}”.` });
+      const started = await api.startPipeRun(saved.pipe.id);
+      const run = await pollRun(started.id, token);
+      if (run === null) {
+        return;
+      }
 
-      const byId = new Map(
-        saved.nodeIds.map((id, index) => [id, run.steps[index]]),
+      setResult(run);
+      setRunError(
+        run.run.status === "error"
+          ? (run.run.error ?? "That run failed.")
+          : null,
       );
-      setNodes((current) =>
-        current.map((node) => {
-          const step = byId.get(node.id);
-          if (!step) {
-            return node;
-          }
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              run: {
-                status: step.seconds > 2 ? "slow" : "done",
-                seconds: step.seconds,
-                itemsOut: step.items_out,
-              },
-            },
-          };
-        }),
-      );
+      if (run.run.status === "success") {
+        setBanner({ message: `Ran “${saved.pipe.name}”.` });
+      }
+
+      applyRunToNodes(saved.nodeIds, run.steps);
     } catch (error) {
+      if (runToken.current !== token) {
+        return;
+      }
       setRunError(messageOf(error));
       setNodes((current) =>
-        current.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            run: node.data.run ? { status: "error" as const } : undefined,
-          },
-        })),
+        current.map((node) =>
+          node.data.run
+            ? { ...node, data: { ...node.data, run: undefined } }
+            : node,
+        ),
       );
     } finally {
-      setRunning(false);
+      if (runToken.current === token) {
+        setRunning(false);
+      }
     }
-  }, [save, setNodes]);
+  }, [applyRunToNodes, pollRun, save, setNodes]);
+
+  const handleAddToReader = useCallback(async () => {
+    if (addingToReader) {
+      return;
+    }
+
+    setAddingToReader(true);
+    try {
+      const saved = await save();
+      if (!saved) {
+        return;
+      }
+
+      const added = await api.addPipeFeed(saved.pipe.id);
+      let count = added.items;
+      let verb = "Added";
+      if (!added.created) {
+        const refreshed = await api.refreshFeed(added.feed.id);
+        if (refreshed.error) {
+          setBanner({
+            message: `“${added.feed.title}” is in the reader, but the refresh failed: ${refreshed.error}`,
+            error: true,
+          });
+          return;
+        }
+        count = refreshed.new_items;
+        verb = "Updated";
+      }
+
+      setBanner({
+        message: `${verb} “${added.feed.title}” in the reader: ${count} item${
+          count === 1 ? "" : "s"
+        }.`,
+      });
+    } catch (error) {
+      setBanner({ message: messageOf(error), error: true });
+    } finally {
+      setAddingToReader(false);
+    }
+  }, [addingToReader, save]);
+
+  const openHistoryRun = useCallback(
+    (run: PipeRun) => {
+      if (run.run.status !== "running") {
+        setResult(run);
+        setRunError(
+          run.run.status === "error"
+            ? (run.run.error ?? "That run failed.")
+            : null,
+        );
+        return;
+      }
+
+      const token = runToken.current + 1;
+      runToken.current = token;
+      setRunning(true);
+      setRunError(null);
+      setResult(null);
+      void (async () => {
+        try {
+          const finished = await pollRun(run.run.id, token);
+          if (finished === null) {
+            return;
+          }
+          setResult(finished);
+          setRunError(
+            finished.run.status === "error"
+              ? (finished.run.error ?? "That run failed.")
+              : null,
+          );
+        } catch (error) {
+          if (runToken.current === token) {
+            setRunError(messageOf(error));
+          }
+        } finally {
+          if (runToken.current === token) {
+            setRunning(false);
+          }
+        }
+      })();
+    },
+    [pollRun],
+  );
+
+  const handleCloseRun = useCallback(() => {
+    // Detach from a run that is still going; history can reopen it.
+    runToken.current += 1;
+    setResult(null);
+    setRunError(null);
+    setRunning(false);
+    setNodes((current) =>
+      current.map((node) =>
+        node.data.run
+          ? { ...node, data: { ...node.data, run: undefined } }
+          : node,
+      ),
+    );
+  }, [setNodes]);
 
   const handleDelete = useCallback(async () => {
     if (activeId === undefined) {
@@ -377,7 +543,7 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
     }
   }, [activeId, router]);
 
-  const busy = saving || running || deleting;
+  const busy = saving || running || deleting || addingToReader;
   const visibleBanner: Banner | null =
     banner ??
     (pipeQuery.error
@@ -437,7 +603,7 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
             value={name}
             onChange={(event) => {
               setName(event.target.value);
-              setDirty(true);
+              markDirty();
             }}
             placeholder="Untitled pipe"
             aria-label="Pipe name"
@@ -465,6 +631,38 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
                 Delete
               </Button>
             )}
+            {activeId !== undefined && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setHistoryOpen(true)}
+                disabled={busy}
+                title="Run history"
+                className="gap-1.5"
+              >
+                <History className="size-3.5" />
+                <span className="max-[900px]:hidden">History</span>
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleAddToReader()}
+              disabled={busy}
+              title="Add this pipe to the reader"
+              className="gap-1.5"
+            >
+              {addingToReader ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Rss className="size-3.5" />
+              )}
+              <span className="max-[900px]:hidden">
+                {addingToReader ? "Adding…" : "Add to reader"}
+              </span>
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -538,15 +736,20 @@ export default function PipeEditor({ pipeId }: { pipeId?: number }) {
           </div>
 
           <RunPanel
+            key={result?.run.id ?? "run-panel"}
             result={result}
             error={runError}
             running={running}
-            onClose={() => {
-              setResult(null);
-              setRunError(null);
-            }}
+            onClose={handleCloseRun}
           />
         </div>
+
+        <RunHistory
+          pipeId={activeId ?? null}
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          onOpenRun={openHistoryRun}
+        />
       </div>
     </PipeGraphProvider>
   );
