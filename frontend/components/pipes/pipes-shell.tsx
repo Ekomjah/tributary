@@ -26,7 +26,7 @@ export default function PipesShell({
           Pipes
         </Link>
         <Link
-          href="/"
+          href="/feeds"
           className="ml-auto flex items-center gap-1.5 text-[12px] text-muted hover:text-ink hover:no-underline"
         >
           <BookOpen className="size-3.5" aria-hidden="true" />

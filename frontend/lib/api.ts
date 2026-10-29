@@ -171,6 +171,13 @@ export const api = {
     });
   },
 
+  getItem(itemId: number, signal?: AbortSignal): Promise<Item> {
+    return request<Item>({
+      url: `/api/items/${itemId}`,
+      signal,
+    });
+  },
+
   fetchItemArticle(itemId: number, force = false): Promise<ArticleFetch> {
     return request<ArticleFetch>({
       url: `/api/items/${itemId}/fetch`,

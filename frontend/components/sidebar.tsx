@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   Inbox,
+  Info,
   Library,
   Lock,
   Plus,
@@ -149,6 +150,13 @@ export default function Sidebar({
           >
             <Workflow className="size-4 shrink-0 text-muted" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate">Pipes</span>
+          </Link>
+          <Link
+            href="/"
+            className="flex h-7 w-full items-center gap-2 rounded-none border-l-[3px] border-transparent px-2 text-left text-[13px] text-ink hover:bg-[#f0f0f0] hover:no-underline"
+          >
+            <Info className="size-4 shrink-0 text-muted" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">About Tributary</span>
           </Link>
         </section>
 
