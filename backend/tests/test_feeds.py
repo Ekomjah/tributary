@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import httpx
@@ -206,6 +207,7 @@ def test_feed_stores_sanitized_content_html(
         <guid>html-post</guid>
         <content:encoded><![CDATA[
           <p onclick="steal()">Hello <script>alert(1)</script>
+          <img src="/photo.jpg" alt="Photo" onerror="steal()">
           <a href="/more">more</a></p>
         ]]></content:encoded></item>
       </channel></rss>"""
@@ -222,8 +224,83 @@ def test_feed_stores_sanitized_content_html(
     assert item.content_html is not None
     assert "<script" not in item.content_html
     assert "onclick" not in item.content_html
+    assert "onerror" not in item.content_html
+    assert 'src="https://example.com/photo.jpg"' in item.content_html
+    assert 'alt="Photo"' in item.content_html
     assert 'href="https://example.com/more"' in item.content_html
     assert "Hello" in item.content
+
+
+def test_feed_uses_entry_images_when_content_has_none(
+    settings: Settings, db_session: Session
+) -> None:
+    rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+      <channel><title>Image Feed</title>
+        <item><title>Enclosure post</title><link>https://example.com/enclosure</link>
+        <guid>enclosure</guid><description><![CDATA[<p>Enclosure body.</p>]]></description>
+        <enclosure url="https://cdn.example.com/enclosure.jpg" type="image/jpeg" length="123"/>
+        </item>
+        <item><title>Thumbnail post</title><link>https://example.com/thumbnail</link>
+        <guid>thumbnail</guid><description><![CDATA[<p>Thumbnail body.</p>]]></description>
+        <media:thumbnail url="https://cdn.example.com/thumbnail.jpg"/>
+        </item>
+        <item><title>Audio post</title><link>https://example.com/audio</link>
+        <guid>audio</guid><description><![CDATA[<p>Audio body.</p>]]></description>
+        <enclosure url="https://cdn.example.com/episode.mp3" type="audio/mpeg" length="123"/>
+        </item>
+      </channel></rss>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=rss.encode())
+
+    with mock_client(handler) as client:
+        fetch_feed(db_session, "https://example.com/images.xml", client=client)
+        db_session.commit()
+
+    items = list(db_session.scalars(select(Item).order_by(Item.id)).all())
+    assert len(items) == 3
+    assert items[0].content_html is not None
+    assert items[0].content_html.startswith("<img")
+    assert 'src="https://cdn.example.com/enclosure.jpg"' in items[0].content_html
+    assert items[1].content_html is not None
+    assert 'src="https://cdn.example.com/thumbnail.jpg"' in items[1].content_html
+    assert items[2].content_html == "<p>Audio body.</p>"
+
+
+def test_fetch_json_feed_uses_item_image_as_lead_image(
+    settings: Settings, db_session: Session
+) -> None:
+    payload = {
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "JSON Image Feed",
+        "items": [
+            {
+                "id": "json-image",
+                "url": "https://example.com/posts/json-image",
+                "title": "JSON image post",
+                "content_html": "<p>JSON body.</p>",
+                "image": "https://cdn.example.com/json.jpg",
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/feed+json"},
+            content=json.dumps(payload).encode(),
+        )
+
+    with mock_client(handler) as client:
+        fetch_feed(db_session, "https://example.com/image.json", client=client)
+        db_session.commit()
+
+    item = db_session.scalar(select(Item))
+    assert item is not None
+    assert item.content_html is not None
+    assert item.content_html.startswith("<img")
+    assert 'src="https://cdn.example.com/json.jpg"' in item.content_html
 
 
 def test_fetch_feed_records_http_errors(settings: Settings, db_session: Session) -> None:

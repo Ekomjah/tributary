@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 import time
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import feedparser
 import httpx
 import sentry_sdk
+from bs4 import BeautifulSoup
 from sentry_sdk import logger as sentry_logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -42,6 +44,9 @@ __all__ = [
 _MAX_REDIRECTS = 5
 _MAX_FEED_BYTES = 2_000_000
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_IMAGE_SUFFIXES = (".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp")
+_IMAGE_SCHEMES = {"http", "https"}
+_TRACKING_PIXEL_MAX = 2
 
 
 class FeedFetchError(RuntimeError):
@@ -643,18 +648,118 @@ def _entry_text(entry: Any) -> tuple[str, str | None]:
 
 
 def _entry_html(entry: Any, base_url: str) -> str | None:
-    """Return the sanitized display copy for an entry, when it has markup."""
+    """Return the sanitized display copy for an entry, when it has markup.
+
+    The HTML must describe the same body as ``_entry_text``. A text/plain
+    content body therefore returns ``None`` instead of falling back to the
+    summary, which would make the reader show a short summary in place of the
+    full text.
+    """
 
     content = _entry_content(entry)
     if content is not None:
         raw_content, content_type = content
-        if content_type != "text/plain":
-            cleaned = sanitize_html(raw_content, base_url=base_url)
-            if cleaned:
-                return cleaned
+        if content_type == "text/plain":
+            return None
+        return sanitize_html(_with_lead_image(raw_content, entry), base_url=base_url)
 
     raw_summary = str(entry.get("summary") or entry.get("description") or "")
-    return sanitize_html(raw_summary, base_url=base_url)
+    if not raw_summary.strip():
+        return None
+    return sanitize_html(_with_lead_image(raw_summary, entry), base_url=base_url)
+
+
+def _with_lead_image(raw_html: str, entry: Any) -> str:
+    """Prepend a feed image when the entry body has no usable image."""
+
+    if _has_safe_image(raw_html):
+        return raw_html
+
+    image = _entry_image(entry)
+    if not image:
+        return raw_html
+    src = html.escape(image, quote=True)
+    return f'<img src="{src}" alt="">{raw_html}'
+
+
+def _has_safe_image(value: str) -> bool:
+    soup = BeautifulSoup(value, "html.parser")
+    for image in soup.find_all("img"):
+        src = str(image.get("src") or "").strip()
+        if not src:
+            continue
+        scheme = urlsplit(src).scheme.lower()
+        if scheme and scheme not in _IMAGE_SCHEMES:
+            continue
+        width = _image_dimension(image.get("width"))
+        height = _image_dimension(image.get("height"))
+        if (
+            width is not None
+            and height is not None
+            and width <= _TRACKING_PIXEL_MAX
+            and height <= _TRACKING_PIXEL_MAX
+        ):
+            continue
+        return True
+    return False
+
+
+def _image_dimension(value: object) -> int | None:
+    text = str(value or "").strip().lower().removesuffix("px").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _entry_image(entry: Any) -> str | None:
+    """Return the best image URL advertised by the entry, when there is one."""
+
+    for item in _as_list(entry.get("media_content")):
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        media_type = str(item.get("type") or "").lower()
+        medium = str(item.get("medium") or "").lower()
+        if url and (
+            media_type.startswith("image/")
+            or medium == "image"
+            or _looks_like_image_url(url)
+        ):
+            return url
+
+    for item in _as_list(entry.get("media_thumbnail")):
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("href") or "").strip()
+        if url:
+            return url
+
+    for item in _as_list(entry.get("enclosures")):
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("href") or item.get("url") or "").strip()
+        media_type = str(item.get("type") or "").lower()
+        if url and (media_type.startswith("image/") or _looks_like_image_url(url)):
+            return url
+
+    image = entry.get("image")
+    if isinstance(image, str) and image.strip():
+        return image.strip()
+    if isinstance(image, dict):
+        url = str(image.get("href") or image.get("url") or "").strip()
+        if url:
+            return url
+    return None
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _looks_like_image_url(value: str) -> bool:
+    return urlsplit(value).path.lower().endswith(_IMAGE_SUFFIXES)
 
 
 def _entry_content(entry: Any) -> tuple[str, str] | None:

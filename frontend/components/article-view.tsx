@@ -61,7 +61,8 @@ export default function ArticleView({
   const readingTime = readingMinutes(plainText(text));
   const published = item.published ?? item.fetched_at;
   // Feed HTML is sanitized with nh3 before storage; never inject it raw.
-  const showHtml = item.content_full === null && Boolean(item.content_html);
+  // Prefer it whenever present so inline images and formatting survive.
+  const showHtml = Boolean(item.content_html);
   const fetchFailed =
     item.content_full === null &&
     item.fetch_status !== null &&

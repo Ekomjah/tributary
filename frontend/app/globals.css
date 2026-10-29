@@ -188,6 +188,19 @@
   text-decoration: underline;
 }
 
+.article-html img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 16px;
+  border: 1px solid var(--divider);
+  background: var(--chrome);
+}
+
+.article-html figure img {
+  margin-bottom: 8px;
+}
+
 .article-html ul,
 .article-html ol {
   margin: 0 0 16px;

@@ -47,10 +47,47 @@ def test_sanitize_html_strips_unsafe_markup_and_resolves_links() -> None:
     assert "onclick" not in cleaned
     assert "onerror" not in cleaned
     assert "<script" not in cleaned
-    assert "<img" not in cleaned
+    assert 'src="https://example.com/posts/x"' in cleaned
     assert 'href="https://example.com/about"' in cleaned
     assert 'rel="noopener noreferrer"' in cleaned
     assert "target=" not in cleaned
+
+
+def test_sanitize_html_keeps_safe_images_and_drops_unsafe_sources() -> None:
+    cleaned = sanitize_html(
+        '<p><img src="/pics/a.png" alt="A" width="1200" height="800"'
+        ' srcset="/pics/a@2x.png 2x" onerror="steal()"></p>'
+        '<img src="data:image/png;base64,AAAA">'
+        '<img src="javascript:alert(1)">'
+        '<img src="https://cdn.example.com/b.jpg" alt="B">',
+        base_url="https://example.com/posts/1",
+    )
+
+    assert cleaned is not None
+    assert 'src="https://example.com/pics/a.png"' in cleaned
+    assert 'src="https://cdn.example.com/b.jpg"' in cleaned
+    assert 'alt="A"' in cleaned
+    assert 'alt="B"' in cleaned
+    assert "data:" not in cleaned
+    assert "javascript:" not in cleaned
+    assert "srcset" not in cleaned
+    assert "onerror" not in cleaned
+    assert "width=" not in cleaned
+    assert "height=" not in cleaned
+    assert 'loading="lazy"' in cleaned
+    assert 'decoding="async"' in cleaned
+    assert 'referrerpolicy="no-referrer"' in cleaned
+
+
+def test_sanitize_html_drops_tracking_pixels() -> None:
+    cleaned = sanitize_html(
+        '<p>Text</p><img src="https://example.com/pixel.gif" width="1" height="1">',
+        base_url="https://example.com/posts/1",
+    )
+
+    assert cleaned is not None
+    assert "pixel.gif" not in cleaned
+    assert "<p>Text</p>" in cleaned
 
 
 def test_sanitize_html_drops_unsafe_links_and_forms() -> None:

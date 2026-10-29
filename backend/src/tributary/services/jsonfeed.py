@@ -66,6 +66,10 @@ def _parse_entry(item: dict[str, Any]) -> FeedParserDict:
     elif content_text:
         entry["content"] = [{"value": str(content_text), "type": "text/plain"}]
 
+    image = item.get("image") or item.get("banner_image")
+    if image:
+        entry["image"] = str(image)
+
     published = item.get("date_published") or item.get("date_modified")
     if published:
         entry["published"] = str(published)

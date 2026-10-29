@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import nh3
 from bs4 import BeautifulSoup
@@ -63,8 +63,9 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _INLINE_SPACE = re.compile(r"[ \t\f\v]+")
 _BLANK_LINES = re.compile(r"\n{3,}")
 
-# A deliberately conservative reading surface: prose, lists, quotes, code, and
-# simple tables. Images, embeds, forms, and inline styles are dropped.
+# A deliberately conservative reading surface: prose, lists, quotes, code,
+# simple tables, and remote images. Embeds, forms, inline SVG, and inline styles
+# are dropped.
 _ALLOWED_TAGS = {
     "a",
     "abbr",
@@ -85,6 +86,7 @@ _ALLOWED_TAGS = {
     "h6",
     "hr",
     "i",
+    "img",
     "ins",
     "kbd",
     "li",
@@ -111,10 +113,13 @@ _ALLOWED_TAGS = {
 }
 _ALLOWED_ATTRIBUTES = {
     "a": {"href", "title"},
+    "img": {"src", "alt", "title", "loading", "decoding", "referrerpolicy"},
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan"},
 }
 _URL_SCHEMES = {"http", "https", "mailto"}
+_IMAGE_SCHEMES = {"http", "https"}
+_TRACKING_PIXEL_MAX = 2
 
 
 def unescape_all(value: str, *, max_passes: int = 5) -> str:
@@ -148,12 +153,57 @@ def readable_title(value: str) -> str:
     return " ".join(html_to_text(value).split())
 
 
+def _dimension(value: object) -> int | None:
+    """Read the leading integer from an HTML width or height attribute."""
+
+    match = re.match(r"\s*(\d+)", str(value or ""))
+    return int(match.group(1)) if match else None
+
+
+def _clean_images(soup: BeautifulSoup, base_url: str | None) -> None:
+    """Resolve safe image sources and force privacy-preserving attributes.
+
+    Only remote http(s) images survive. Relative URLs are resolved against the
+    article URL, obvious tracking pixels are removed, and every kept image is
+    lazy-loaded without a referrer.
+    """
+
+    for image in soup.find_all("img"):
+        src = str(image.get("src") or "").strip()
+        if not src:
+            image.decompose()
+            continue
+
+        if base_url:
+            src = urljoin(base_url, src)
+        if urlsplit(src).scheme.lower() not in _IMAGE_SCHEMES:
+            image.decompose()
+            continue
+
+        width = _dimension(image.get("width"))
+        height = _dimension(image.get("height"))
+        if (
+            width is not None
+            and height is not None
+            and width <= _TRACKING_PIXEL_MAX
+            and height <= _TRACKING_PIXEL_MAX
+        ):
+            image.decompose()
+            continue
+
+        image["src"] = src
+        image["loading"] = "lazy"
+        image["decoding"] = "async"
+        image["referrerpolicy"] = "no-referrer"
+
+
 def sanitize_html(value: str, *, base_url: str | None = None) -> str | None:
     """Return a safe HTML fragment for display, or ``None`` when there is none.
 
-    Relative links are resolved against ``base_url`` before the fragment is
-    cleaned with nh3. Plain text and double-escaped markup produce ``None`` so
-    the reader keeps rendering the plain-text summary instead.
+    Relative links and image sources are resolved against ``base_url`` before
+    the fragment is cleaned with nh3. Remote images keep only safe source and
+    alt text attributes. Plain text and double-escaped markup produce ``None``
+    so the reader keeps rendering the plain-text summary instead.
     """
 
     if not value or not value.strip():
@@ -168,6 +218,8 @@ def sanitize_html(value: str, *, base_url: str | None = None) -> str | None:
             href = str(link.get("href") or "").strip()
             if href:
                 link["href"] = urljoin(base_url, href)
+
+    _clean_images(soup, base_url)
 
     cleaned = nh3.clean(
         str(soup),
