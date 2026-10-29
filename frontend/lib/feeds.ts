@@ -61,7 +61,7 @@ export function feedsHref(scope: FeedsScope): string {
 
 export function scopeLabel(scope: FeedsScope, feeds: Feed[]): string {
   if (scope.query) {
-    return "search results";
+    return "Search results";
   }
   if (scope.label) {
     return scope.label;
@@ -75,6 +75,16 @@ export function scopeLabel(scope: FeedsScope, feeds: Feed[]): string {
 
 export function itemsQueryKey(scope: FeedsScope) {
   return ["items", scope.view, scope.feedId, scope.label, scope.query] as const;
+}
+
+export function scopeAfterFeedDelete(
+  scope: FeedsScope,
+  feedId: number,
+): FeedsScope | null {
+  if (scope.feedId !== feedId) {
+    return null;
+  }
+  return { view: "all", feedId: null, label: null, query: "" };
 }
 
 export function articleSlug(item: Pick<Item, "id" | "title">): string {

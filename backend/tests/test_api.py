@@ -127,6 +127,7 @@ def test_feed_crud_and_validation(client: TestClient, monkeypatch) -> None:
 
     assert client.delete(f"/api/feeds/{feed_id}").status_code == 204
     assert client.get(f"/api/feeds/{feed_id}").status_code == 404
+    assert client.get("/api/items").json()["total"] == 0
 
 
 def test_create_rejects_non_feed_without_row(client: TestClient, monkeypatch) -> None:

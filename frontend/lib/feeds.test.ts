@@ -7,6 +7,7 @@ import {
   itemIdFromHash,
   itemIdFromSlug,
   readScope,
+  scopeAfterFeedDelete,
   scopeLabel,
 } from "./feeds";
 import type { Feed } from "./types";
@@ -124,7 +125,27 @@ describe("scopeLabel", () => {
         { view: "all", feedId: 3, label: null, query: "sqlite" },
         FEEDS,
       ),
-    ).toBe("search results");
+    ).toBe("Search results");
+  });
+});
+
+describe("scopeAfterFeedDelete", () => {
+  it("returns to All items when the selected feed is deleted", () => {
+    expect(
+      scopeAfterFeedDelete(
+        { view: "unread", feedId: 3, label: null, query: "sqlite" },
+        3,
+      ),
+    ).toEqual({ view: "all", feedId: null, label: null, query: "" });
+  });
+
+  it("leaves the scope alone when another feed is deleted", () => {
+    expect(
+      scopeAfterFeedDelete(
+        { view: "all", feedId: 3, label: null, query: "" },
+        4,
+      ),
+    ).toBeNull();
   });
 });
 

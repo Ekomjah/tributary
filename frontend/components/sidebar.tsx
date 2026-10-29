@@ -9,6 +9,7 @@ import {
   Search,
   Star,
   Tag,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
@@ -40,6 +41,7 @@ interface SidebarProps {
   onSelectLabel: (name: string) => void;
   onAddFeed: () => void;
   onAddLabel: () => void;
+  onDeleteFeed: (feed: Feed) => void;
 }
 
 function Row({
@@ -49,6 +51,8 @@ function Row({
   count,
   onClick,
   title,
+  onDelete,
+  deleteLabel,
 }: {
   active: boolean;
   icon: ComponentType<{ className?: string }>;
@@ -56,34 +60,52 @@ function Row({
   count?: number;
   onClick: () => void;
   title?: string;
+  onDelete?: () => void;
+  deleteLabel?: string;
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      title={title}
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-      className={cn(
-        "h-7 w-full justify-start gap-2 rounded-none border-l-[3px] px-2 text-left text-[13px] font-normal",
-        active
-          ? "border-accent bg-accent-bg font-bold text-ink"
-          : "border-transparent hover:bg-[#f0f0f0]",
-      )}
-    >
-      <Icon
+    <div className="group relative w-full">
+      <Button
+        type="button"
+        variant="ghost"
+        title={title}
+        aria-current={active ? "page" : undefined}
+        onClick={onClick}
         className={cn(
-          "size-4 shrink-0",
-          active ? "text-accent" : "text-muted",
+          "h-7 w-full justify-start gap-2 rounded-none border-l-[3px] px-2 text-left text-[13px] font-normal",
+          active
+            ? "border-accent bg-accent-bg font-bold text-ink"
+            : "border-transparent hover:bg-[#f0f0f0]",
+          onDelete && "pr-8",
         )}
-      />
-      <span className="min-w-0 flex-1 truncate">{children}</span>
-      {typeof count === "number" && count > 0 && (
-        <span className="shrink-0 font-mono text-[11px] font-normal text-faint">
-          ({count})
-        </span>
+      >
+        <Icon
+          className={cn(
+            "size-4 shrink-0",
+            active ? "text-accent" : "text-muted",
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate">{children}</span>
+        {typeof count === "number" && count > 0 && (
+          <span className="shrink-0 font-mono text-[11px] font-normal text-faint">
+            ({count})
+          </span>
+        )}
+      </Button>
+      {onDelete && (
+        <Button
+          type="button"
+          variant="icon"
+          size="icon-xs"
+          className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 transition-opacity max-[699px]:pointer-events-auto max-[699px]:opacity-100 min-[700px]:group-hover:pointer-events-auto min-[700px]:group-hover:opacity-100 min-[700px]:group-focus-within:pointer-events-auto min-[700px]:group-focus-within:opacity-100"
+          aria-label={deleteLabel}
+          title={deleteLabel}
+          onClick={onDelete}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
       )}
-    </Button>
+    </div>
   );
 }
 
@@ -117,6 +139,7 @@ export default function Sidebar({
   onSelectLabel,
   onAddFeed,
   onAddLabel,
+  onDeleteFeed,
 }: SidebarProps) {
   const subscriptions = feeds.filter((feed) => feed.kind !== "search");
   const searches = feeds.filter((feed) => feed.kind === "search");
@@ -192,6 +215,8 @@ export default function Sidebar({
                   count={feedCounts[feed.id] ?? 0}
                   title={feed.url}
                   onClick={() => onSelectFeed(feed.id)}
+                  onDelete={() => onDeleteFeed(feed)}
+                  deleteLabel={`Delete ${feed.title || feed.url}`}
                 >
                   {feed.title || feed.url}
                 </Row>

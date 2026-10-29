@@ -126,6 +126,13 @@ export const api = {
     });
   },
 
+  deleteFeed(feedId: number): Promise<void> {
+    return request<void>({
+      url: `/api/feeds/${feedId}`,
+      method: "DELETE",
+    });
+  },
+
   refreshFeed(feedId: number): Promise<FeedRefreshResult> {
     return request<FeedRefreshResult>({
       url: `/api/feeds/${feedId}/refresh`,

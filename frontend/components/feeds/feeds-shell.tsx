@@ -30,6 +30,7 @@ import {
 
 import AddFeedDialog from "@/components/add-feed-dialog";
 import AddLabelDialog from "@/components/add-label-dialog";
+import DeleteFeedDialog from "@/components/delete-feed-dialog";
 import Sidebar from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +50,7 @@ import { api, apiBase, ApiError } from "@/lib/api";
 import {
   feedsHref,
   readScope,
+  scopeAfterFeedDelete,
   VIEW_NAMES,
   VIEWS,
   type FeedsScope,
@@ -221,6 +223,7 @@ export default function FeedsShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [addFeedOpen, setAddFeedOpen] = useState(false);
   const [addLabelOpen, setAddLabelOpen] = useState(false);
+  const [feedToDelete, setFeedToDelete] = useState<Feed | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -623,11 +626,40 @@ export default function FeedsShell({
     [createLabel, queryClient, showStatus],
   );
 
+  const deleteFeed = useCallback(
+    async (feed: Feed) => {
+      try {
+        await api.deleteFeed(feed.id);
+        const name = feed.title || hostOf(feed.url);
+        showStatus(
+          feed.kind === "search"
+            ? `Removed “${name}”.`
+            : `Deleted “${name}” and its articles.`,
+        );
+
+        const nextScope = scopeAfterFeedDelete(scope, feed.id);
+        if (nextScope) {
+          navigateToScope(nextScope);
+        }
+
+        void queryClient.invalidateQueries({ queryKey: ["feeds"] });
+        void queryClient.invalidateQueries({ queryKey: ["counts"] });
+        void queryClient.invalidateQueries({ queryKey: ["items"] });
+        void queryClient.invalidateQueries({ queryKey: ["item"] });
+        return null;
+      } catch (error) {
+        return messageOf(error);
+      }
+    },
+    [navigateToScope, queryClient, scope, showStatus],
+  );
+
   const scrollToTop = useCallback(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, []);
 
-  const shortcutsBlocked = addFeedOpen || addLabelOpen || drawerOpen;
+  const shortcutsBlocked =
+    addFeedOpen || addLabelOpen || drawerOpen || feedToDelete !== null;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -963,6 +995,7 @@ export default function FeedsShell({
               onSelectLabel={selectLabel}
               onAddFeed={() => setAddFeedOpen(true)}
               onAddLabel={() => setAddLabelOpen(true)}
+              onDeleteFeed={setFeedToDelete}
             />
           </aside>
 
@@ -984,6 +1017,17 @@ export default function FeedsShell({
           open={addLabelOpen}
           onOpenChange={setAddLabelOpen}
           onSubmit={submitLabel}
+        />
+        <DeleteFeedDialog
+          feed={feedToDelete}
+          onOpenChange={(open) => {
+            if (!open) {
+              setFeedToDelete(null);
+            }
+          }}
+          onConfirm={() =>
+            feedToDelete ? deleteFeed(feedToDelete) : Promise.resolve(null)
+          }
         />
 
         <Dialog open={drawerOpen} onOpenChange={setDrawerOpen}>
@@ -1029,6 +1073,10 @@ export default function FeedsShell({
                   onAddLabel={() => {
                     setDrawerOpen(false);
                     setAddLabelOpen(true);
+                  }}
+                  onDeleteFeed={(feed) => {
+                    setDrawerOpen(false);
+                    setFeedToDelete(feed);
                   }}
                 />
               </div>
