@@ -43,6 +43,10 @@ export interface Item {
   published: string | null;
   content: string;
   content_html: string | null;
+  author: string | null;
+  cover_image: string | null;
+  cover_image_alt: string | null;
+  cover_caption: string | null;
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
@@ -59,6 +63,10 @@ export interface Item {
 export interface ArticleFetch {
   id: number;
   content_html: string | null;
+  author: string | null;
+  cover_image: string | null;
+  cover_image_alt: string | null;
+  cover_caption: string | null;
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
