@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import html
 import logging
 import time
 from dataclasses import dataclass
@@ -12,7 +11,6 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import feedparser
 import httpx
 import sentry_sdk
-from bs4 import BeautifulSoup
 from sentry_sdk import logger as sentry_logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -21,7 +19,17 @@ from ..config import Settings
 from ..db import session_scope, utcnow
 from ..models import Feed, Item
 from .jsonfeed import JsonFeedError, parse_json_feed
-from .text import html_to_text, normalize_text, readable_title, sanitize_html
+from .text import (
+    clean_byline,
+    html_to_text,
+    is_promo_image,
+    leading_image,
+    normalize_text,
+    readable_title,
+    safe_image_url,
+    sanitize_html,
+    strip_leading_image,
+)
 from .urls import redact_url, redact_urls_in_text, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -45,8 +53,6 @@ _MAX_REDIRECTS = 5
 _MAX_FEED_BYTES = 2_000_000
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _IMAGE_SUFFIXES = (".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp")
-_IMAGE_SCHEMES = {"http", "https"}
-_TRACKING_PIXEL_MAX = 2
 
 
 class FeedFetchError(RuntimeError):
@@ -413,7 +419,16 @@ def store_entries(
 
         content, full_text = _entry_text(entry)
         has_full_text = bool(full_text and len(full_text) >= min_full_chars)
-        content_html = _entry_html(entry, link or feed_url)
+        base_url = link or feed_url
+        content_html = _entry_html(entry, base_url)
+        cover_image, cover_image_alt, cover_caption = _entry_cover(
+            entry,
+            content_html,
+            base_url,
+        )
+        if content_html and cover_image:
+            content_html, stripped_caption = strip_leading_image(content_html, cover_image)
+            cover_caption = stripped_caption or cover_caption
 
         session.add(
             Item(
@@ -424,6 +439,10 @@ def store_entries(
                 published=_entry_published(entry),
                 content=content,
                 content_html=content_html,
+                author=_entry_author(entry),
+                cover_image=cover_image,
+                cover_image_alt=cover_image_alt,
+                cover_caption=cover_caption,
                 content_full=full_text if has_full_text else None,
                 fetch_status="ok" if has_full_text else None,
                 content_fetched_at=now if has_full_text else None,
@@ -653,7 +672,8 @@ def _entry_html(entry: Any, base_url: str) -> str | None:
     The HTML must describe the same body as ``_entry_text``. A text/plain
     content body therefore returns ``None`` instead of falling back to the
     summary, which would make the reader show a short summary in place of the
-    full text.
+    full text. The entry's image is stored as frontmatter instead of being
+    injected into the body, so the reader can render it once as a cover.
     """
 
     content = _entry_content(entry)
@@ -661,52 +681,45 @@ def _entry_html(entry: Any, base_url: str) -> str | None:
         raw_content, content_type = content
         if content_type == "text/plain":
             return None
-        return sanitize_html(_with_lead_image(raw_content, entry), base_url=base_url)
+        return sanitize_html(raw_content, base_url=base_url)
 
     raw_summary = str(entry.get("summary") or entry.get("description") or "")
     if not raw_summary.strip():
         return None
-    return sanitize_html(_with_lead_image(raw_summary, entry), base_url=base_url)
+    return sanitize_html(raw_summary, base_url=base_url)
 
 
-def _with_lead_image(raw_html: str, entry: Any) -> str:
-    """Prepend a feed image when the entry body has no usable image."""
+def _entry_author(entry: Any) -> str | None:
+    """Return the writer named by an entry, when it has one."""
 
-    if _has_safe_image(raw_html):
-        return raw_html
+    for key in ("author", "dc_creator"):
+        author = clean_byline(str(entry.get(key) or ""))
+        if author:
+            return author
 
-    image = _entry_image(entry)
-    if not image:
-        return raw_html
-    src = html.escape(image, quote=True)
-    return f'<img src="{src}" alt="">{raw_html}'
-
-
-def _has_safe_image(value: str) -> bool:
-    soup = BeautifulSoup(value, "html.parser")
-    for image in soup.find_all("img"):
-        src = str(image.get("src") or "").strip()
-        if not src:
-            continue
-        scheme = urlsplit(src).scheme.lower()
-        if scheme and scheme not in _IMAGE_SCHEMES:
-            continue
-        width = _image_dimension(image.get("width"))
-        height = _image_dimension(image.get("height"))
-        if (
-            width is not None
-            and height is not None
-            and width <= _TRACKING_PIXEL_MAX
-            and height <= _TRACKING_PIXEL_MAX
-        ):
-            continue
-        return True
-    return False
+    for item in _as_list(entry.get("authors")):
+        if isinstance(item, dict):
+            author = clean_byline(str(item.get("name") or ""))
+            if author:
+                return author
+    return None
 
 
-def _image_dimension(value: object) -> int | None:
-    text = str(value or "").strip().lower().removesuffix("px").strip()
-    return int(text) if text.isdigit() else None
+def _entry_cover(
+    entry: Any,
+    content_html: str | None,
+    base_url: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Pick the lead image, preferring the one already at the top of the body."""
+
+    leading = leading_image(content_html)
+    if leading is not None:
+        return leading
+
+    image = safe_image_url(_entry_image(entry), base_url=base_url)
+    if image is None or is_promo_image(image):
+        return None, None, None
+    return image, None, None
 
 
 def _entry_image(entry: Any) -> str | None:

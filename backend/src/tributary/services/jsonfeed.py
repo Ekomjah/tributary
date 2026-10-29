@@ -70,6 +70,22 @@ def _parse_entry(item: dict[str, Any]) -> FeedParserDict:
     if image:
         entry["image"] = str(image)
 
+    author = item.get("author")
+    if isinstance(author, dict) and author.get("name"):
+        entry["author"] = str(author["name"])
+    elif isinstance(author, str) and author.strip():
+        entry["author"] = author
+
+    authors = item.get("authors")
+    if isinstance(authors, list):
+        names = [
+            str(value.get("name") or "").strip()
+            for value in authors
+            if isinstance(value, dict) and value.get("name")
+        ]
+        if names:
+            entry["authors"] = [{"name": ", ".join(names)}]
+
     published = item.get("date_published") or item.get("date_modified")
     if published:
         entry["published"] = str(published)

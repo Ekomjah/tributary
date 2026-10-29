@@ -77,6 +77,10 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 _ITEM_COLUMNS: dict[str, str] = {
     "content_html": "TEXT",
+    "author": "VARCHAR(200)",
+    "cover_image": "TEXT",
+    "cover_image_alt": "TEXT",
+    "cover_caption": "TEXT",
     "content_full": "TEXT",
     "content_fetched_at": "DATETIME",
     "fetch_status": "VARCHAR(16)",

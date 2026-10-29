@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 from sqlalchemy.orm import Session
@@ -38,7 +40,11 @@ def article_html() -> str:
     return (
         "<html><body><nav>Menu</nav><article><h1>Example</h1>"
         + "".join(f"<p>{paragraph}</p>" for _ in range(3))
-        + "</article><footer>Footer</footer></body></html>"
+        + '<p>Read <a href="/about">about the project</a>.</p>'
+        + "<h2>Section</h2><ul><li>First point</li><li>Second point</li></ul>"
+        '<img src="/pic.jpg" alt="Pic"><blockquote>Quoted text.</blockquote>'
+        "<table><tr><th>Column</th></tr><tr><td>Cell</td></tr></table>"
+        "</article><footer>Footer</footer></body></html>"
     )
 
 
@@ -116,7 +122,7 @@ def test_page_extraction_stores_readable_text(db_session: Session, settings: Set
     assert "Menu" not in (item.content_full or "")
 
 
-def test_successful_article_fetch_clears_display_html(
+def test_successful_article_fetch_keeps_extracted_html(
     db_session: Session, settings: Settings
 ) -> None:
     item = make_item(db_session, content="Short feed summary.")
@@ -140,7 +146,280 @@ def test_successful_article_fetch_clears_display_html(
 
     assert result.status == "ok"
     assert item.content_full
-    assert item.content_html is None
+    assert item.content_html is not None
+    assert "<p>" in item.content_html
+    assert "<h2>Section</h2>" in item.content_html
+    assert "<ul>" in item.content_html
+    assert "<blockquote>" in item.content_html
+    assert 'src="https://example.com/pic.jpg"' in item.content_html
+    assert 'href="https://example.com/about"' in item.content_html
+    assert "<table>" in item.content_html
+    assert "<td>Cell</td>" in item.content_html
+    assert "Menu" not in item.content_html
+    assert "Footer" not in item.content_html
+    assert "<script" not in item.content_html
+    assert "<h1>" not in item.content_html
+
+
+def test_article_fetch_drops_the_title_repeated_by_the_page(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.", title="Example")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=article_html().encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert item.content_html is not None
+    assert "Example" not in item.content_html
+    assert not (item.content_full or "").startswith("Example")
+
+
+def frontmatter_article_html(*, lead_image: bool = True) -> str:
+    paragraph = "A substantial sentence about the article topic. " * 12
+    image = (
+        '<figure><img src="/ace/standard/1920/abc123.jpg" alt="A wide cover">'
+        "<figcaption>The cover caption.</figcaption></figure>"
+        if lead_image
+        else ""
+    )
+    return (
+        "<html><head><title>Example</title>"
+        '<meta name="author" content="Jane Doe">'
+        '<meta property="og:image" content="https://example.com/ace/branded_news/1200/abc123.jpg">'
+        "</head><body><article>"
+        + image
+        + "<ul><li>Published1 day ago</li></ul>"
+        + "".join(f"<p>{paragraph}</p>" for _ in range(3))
+        + "</article></body></html>"
+    )
+
+
+def test_article_fetch_moves_the_lead_image_into_frontmatter(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=frontmatter_article_html().encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert item.author == "Jane Doe"
+    assert item.cover_image == "https://example.com/ace/standard/1920/abc123.jpg"
+    assert item.cover_image_alt == "A wide cover"
+    assert item.content_html is not None
+    assert "abc123.jpg" not in item.content_html
+    assert "<figcaption>" not in item.content_html
+    assert "Published" not in item.content_html
+    assert "substantial sentence" in item.content_html
+
+
+def test_article_fetch_uses_page_metadata_when_the_body_has_no_lead_image(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=frontmatter_article_html(lead_image=False).encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert item.author == "Jane Doe"
+    assert item.cover_image == "https://example.com/ace/branded_news/1200/abc123.jpg"
+    assert item.cover_image_alt is None
+    assert item.cover_caption is None
+
+
+def test_article_fetch_keeps_frontmatter_when_metadata_is_missing_or_promotional(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.")
+    item.author = "Feed Author"
+    item.cover_image = "https://example.com/feed-cover.jpg"
+    item.cover_image_alt = "Feed cover"
+    db_session.commit()
+
+    paragraph = "A substantial sentence about the article topic. " * 12
+    page = (
+        "<html><head><title>Example</title>"
+        '<meta property="og:image" content="https://example.com/newsletter/cover.jpg">'
+        "</head><body><article>"
+        + "".join(f"<p>{paragraph}</p>" for _ in range(3))
+        + "</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert item.author == "Feed Author"
+    assert item.cover_image == "https://example.com/feed-cover.jpg"
+    assert item.cover_image_alt == "Feed cover"
+
+
+def test_backfill_frontmatter_fills_old_items_without_touching_text(
+    db_session: Session, settings: Settings
+) -> None:
+    fetched_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    item = make_item(db_session, content="Short feed summary.", content_full="Old full text.")
+    item.fetch_status = "ok"
+    item.content_fetched_at = fetched_at
+    db_session.commit()
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=frontmatter_article_html().encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        updated = articles.backfill_frontmatter(
+            db_session,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert calls == 1
+    assert updated == 1
+    assert item.author == "Jane Doe"
+    assert item.cover_image == "https://example.com/ace/standard/1920/abc123.jpg"
+    assert item.content_html is not None
+    assert "abc123.jpg" not in item.content_html
+    assert item.content_full == "Old full text."
+    assert item.fetch_status == "ok"
+    assert item.content_fetched_at == fetched_at
+
+
+def test_backfill_frontmatter_strips_a_cover_from_stored_html(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.", content_full="Existing body.")
+    item.fetch_status = "ok"
+    item.content_html = (
+        '<figure><img src="https://example.com/ace/standard/1920/abc123.jpg" alt="Old">'
+        "<figcaption>Stored caption.</figcaption></figure><p>Existing body.</p>"
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=frontmatter_article_html().encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        updated = articles.backfill_frontmatter(
+            db_session,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert updated == 1
+    assert item.cover_image == "https://example.com/ace/standard/1920/abc123.jpg"
+    assert item.cover_caption == "Stored caption."
+    assert item.content_html == "<p>Existing body.</p>"
+    assert item.content_full == "Existing body."
+
+
+def test_backfill_frontmatter_leaves_failed_items_untouched(
+    db_session: Session, settings: Settings
+) -> None:
+    fetched_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    item = make_item(db_session, content="Short feed summary.", content_full="Old full text.")
+    item.fetch_status = "ok"
+    item.content_fetched_at = fetched_at
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        updated = articles.backfill_frontmatter(
+            db_session,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert updated == 0
+    assert item.author is None
+    assert item.cover_image is None
+    assert item.content_full == "Old full text."
+    assert item.fetch_status == "ok"
+    assert item.content_fetched_at == fetched_at
+
+
+def test_backfill_frontmatter_skips_items_that_already_have_it(
+    db_session: Session, settings: Settings
+) -> None:
+    item = make_item(db_session, content="Short feed summary.", content_full="Old full text.")
+    item.fetch_status = "ok"
+    item.author = "Existing Author"
+    item.cover_image = "https://example.com/existing.jpg"
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("complete items should not be fetched")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        updated = articles.backfill_frontmatter(
+            db_session,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert updated == 0
+    assert item.author == "Existing Author"
+    assert item.cover_image == "https://example.com/existing.jpg"
 
 
 def test_short_page_is_empty(db_session: Session, settings: Settings) -> None:

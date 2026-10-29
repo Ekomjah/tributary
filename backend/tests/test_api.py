@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tributary.models import Feed, Item, Label
-from tributary.services import feeds
+from tributary.services import articles, feeds
 
 RSS = """<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0">
@@ -353,6 +353,64 @@ def test_item_exposes_sanitized_content_html(client: TestClient, db_session: Ses
 
     assert body["content_html"] == item.content_html
     assert body["content"] == ""
+
+
+def test_item_exposes_article_frontmatter(client: TestClient, db_session: Session) -> None:
+    feed = seed_feed(db_session)
+    item = seed_item(db_session, feed, guid="frontmatter-item", title="Frontmatter post")
+    item.author = "Jane Doe"
+    item.cover_image = "https://example.com/cover.jpg"
+    item.cover_image_alt = "A wide cover"
+    item.cover_caption = "The cover caption."
+    db_session.commit()
+
+    body = client.get(f"/api/items/{item.id}").json()
+
+    assert body["author"] == "Jane Doe"
+    assert body["cover_image"] == "https://example.com/cover.jpg"
+    assert body["cover_image_alt"] == "A wide cover"
+    assert body["cover_caption"] == "The cover caption."
+
+
+def test_fetch_item_article_returns_frontmatter(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    feed = seed_feed(db_session)
+    item = seed_item(db_session, feed, guid="fetch-frontmatter", title="Example")
+
+    paragraph = "A substantial sentence about the article topic. " * 12
+    page = (
+        "<html><head><title>Example</title>"
+        '<meta name="author" content="Jane Doe">'
+        '<meta property="og:image" content="https://example.com/branded/1200/abc123.jpg">'
+        "</head><body><article>"
+        '<figure><img src="https://example.com/standard/1920/abc123.jpg" alt="A cover">'
+        "<figcaption>The cover caption.</figcaption></figure>"
+        + "".join(f"<p>{paragraph}</p>" for _ in range(3))
+        + "</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=page.encode(),
+        )
+
+    monkeypatch.setattr(articles, "make_client", lambda settings: mock_client(handler))
+
+    response = client.post(f"/api/items/{item.id}/fetch")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["author"] == "Jane Doe"
+    assert body["cover_image"] == "https://example.com/standard/1920/abc123.jpg"
+    assert body["cover_image_alt"] == "A cover"
+    assert body["content_html"] is not None
+    assert "abc123.jpg" not in body["content_html"]
+    assert body["fetch_status"] == "ok"
 
 
 def test_item_labels_can_be_added_and_removed(client: TestClient, db_session: Session) -> None:

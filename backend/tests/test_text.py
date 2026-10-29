@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from tributary.services.text import (
+    clean_byline,
     html_to_text,
+    is_promo_image,
+    leading_image,
     normalize_text,
     readable_title,
+    safe_image_url,
     sanitize_html,
+    strip_leading_image,
+    titles_match,
     unescape_all,
 )
 
@@ -122,3 +128,131 @@ def test_sanitize_html_treats_double_escaped_markup_as_text() -> None:
 
 def test_sanitize_html_returns_none_for_plain_text() -> None:
     assert sanitize_html("Just a plain summary.") is None
+
+
+def test_sanitize_html_turns_div_blocks_into_paragraphs() -> None:
+    cleaned = sanitize_html("<div>First paragraph</div><div>Second <b>paragraph</b></div>")
+
+    assert cleaned == "<p>First paragraph</p><p>Second <b>paragraph</b></p>"
+
+
+def test_sanitize_html_flattens_nested_layout_divs() -> None:
+    cleaned = sanitize_html("<div><div>Alpha</div><div><div>Beta</div></div></div>")
+
+    assert cleaned == "<p>Alpha</p><p>Beta</p>"
+
+
+def test_sanitize_html_keeps_block_structure_inside_sections() -> None:
+    cleaned = sanitize_html("<section><h2>A heading</h2>Loose text.<p>A paragraph.</p></section>")
+
+    assert cleaned == ("<h2>A heading</h2><p>Loose text.</p><p>A paragraph.</p>")
+
+
+def test_sanitize_html_wraps_loose_text_but_not_a_lead_image() -> None:
+    cleaned = sanitize_html('<img src="https://example.com/lead.jpg" alt="Lead"><p>Text</p>')
+
+    assert cleaned is not None
+    assert cleaned.startswith("<img")
+    assert '<img alt="Lead"' in cleaned
+    assert "<p>Text</p>" in cleaned
+
+
+def test_sanitize_html_drops_empty_paragraphs() -> None:
+    cleaned = sanitize_html("<p>One</p><p> </p><p><br></p><p>Two</p>")
+
+    assert cleaned == "<p>One</p><p>Two</p>"
+
+
+def test_sanitize_html_flattens_nested_pre_blocks() -> None:
+    cleaned = sanitize_html("<pre><pre>print(1)</pre></pre>")
+
+    assert cleaned == "<pre>print(1)</pre>"
+
+
+def test_sanitize_html_demotes_body_headings_below_the_page_title() -> None:
+    cleaned = sanitize_html("<h1>Section</h1><h3>Subsection</h3>")
+
+    assert cleaned == "<h2>Section</h2><h3>Subsection</h3>"
+
+
+def test_sanitize_html_preserves_paragraph_line_breaks_and_inline_spacing() -> None:
+    cleaned = sanitize_html("<p>One<br>Two<br><br>Three <em>four</em></p>")
+
+    assert cleaned is not None
+    assert cleaned.count("<br") == 3
+    assert "Three <em>four</em>" in cleaned
+    assert cleaned.startswith("<p>One<br")
+
+
+def test_titles_match_ignores_markup_case_and_site_suffix() -> None:
+    assert titles_match("<b>A Big Post About Things</b>", "a big post about things")
+    assert titles_match("A Big Post About Things — Example", "A Big Post About Things")
+    assert not titles_match("A Big Post About Things", "Another Post Entirely")
+    assert not titles_match("Week 4", "Week 4 recap")
+    assert not titles_match("", "A Big Post About Things")
+
+
+def test_clean_byline_strips_prefixes_and_rejects_contact_details() -> None:
+    assert clean_byline("By Jane Doe") == "Jane Doe"
+    assert clean_byline("Written by Jane Doe") == "Jane Doe"
+    assert clean_byline("jane@example.com") is None
+    assert clean_byline("https://example.com/jane") is None
+
+
+def test_safe_image_url_resolves_relative_sources_and_rejects_local_schemes() -> None:
+    assert (
+        safe_image_url("/cover.jpg", base_url="https://example.com/post")
+        == "https://example.com/cover.jpg"
+    )
+    assert safe_image_url("data:image/png;base64,AAAA") is None
+    assert is_promo_image("https://example.com/promo/cover.jpg")
+    assert is_promo_image("https://example.com/newsletter-cover.jpg")
+    assert not is_promo_image("https://example.com/2026/10/octoverse-header.jpg")
+
+
+def test_leading_image_reads_a_figure_with_alt_and_caption() -> None:
+    fragment = (
+        '<figure><img src="https://example.com/cover.jpg" alt="A cover">'
+        "<figcaption>The caption.</figcaption></figure><p>Body.</p>"
+    )
+
+    assert leading_image(fragment) == ("https://example.com/cover.jpg", "A cover", "The caption.")
+
+
+def test_leading_image_accepts_an_image_only_paragraph() -> None:
+    fragment = '<p><a href="/"><img src="https://example.com/a.jpg" alt="A"></a></p>'
+
+    assert leading_image(fragment) == ("https://example.com/a.jpg", "A", None)
+
+
+def test_leading_image_ignores_a_body_that_starts_with_text() -> None:
+    assert leading_image('<p>Intro</p><img src="https://example.com/a.jpg" alt="A">') is None
+
+
+def test_strip_leading_image_deduplicates_a_cover_at_another_size() -> None:
+    fragment = (
+        '<figure><img src="https://ichef.bbci.co.uk/ace/standard/1920/abc123.jpg" alt="A">'
+        "<figcaption>Caption.</figcaption></figure><p>Body.</p>"
+    )
+
+    cleaned, caption = strip_leading_image(
+        fragment,
+        "https://ichef.bbci.co.uk/ace/branded_news/1200/abc123.jpg",
+    )
+
+    assert cleaned == "<p>Body.</p>"
+    assert caption == "Caption."
+
+
+def test_strip_leading_image_keeps_a_different_or_captioned_image() -> None:
+    fragment = '<p><img src="https://example.com/a.jpg" alt="A"></p><p>Body.</p>'
+    assert strip_leading_image(fragment, "https://example.com/b.jpg") == (
+        fragment,
+        None,
+    )
+
+    captioned = '<p>A photo <img src="https://example.com/a.jpg"></p><p>Body.</p>'
+    assert strip_leading_image(captioned, "https://example.com/a.jpg") == (
+        captioned,
+        None,
+    )

@@ -260,11 +260,11 @@ def test_feed_uses_entry_images_when_content_has_none(
 
     items = list(db_session.scalars(select(Item).order_by(Item.id)).all())
     assert len(items) == 3
-    assert items[0].content_html is not None
-    assert items[0].content_html.startswith("<img")
-    assert 'src="https://cdn.example.com/enclosure.jpg"' in items[0].content_html
-    assert items[1].content_html is not None
-    assert 'src="https://cdn.example.com/thumbnail.jpg"' in items[1].content_html
+    assert items[0].cover_image == "https://cdn.example.com/enclosure.jpg"
+    assert items[0].content_html == "<p>Enclosure body.</p>"
+    assert items[1].cover_image == "https://cdn.example.com/thumbnail.jpg"
+    assert items[1].content_html == "<p>Thumbnail body.</p>"
+    assert items[2].cover_image is None
     assert items[2].content_html == "<p>Audio body.</p>"
 
 
@@ -298,9 +298,39 @@ def test_fetch_json_feed_uses_item_image_as_lead_image(
 
     item = db_session.scalar(select(Item))
     assert item is not None
-    assert item.content_html is not None
-    assert item.content_html.startswith("<img")
-    assert 'src="https://cdn.example.com/json.jpg"' in item.content_html
+    assert item.cover_image == "https://cdn.example.com/json.jpg"
+    assert item.content_html == "<p>JSON body.</p>"
+
+
+def test_feed_stores_lead_image_and_writer_as_frontmatter(
+    settings: Settings, db_session: Session
+) -> None:
+    rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+      <channel><title>Frontmatter Feed</title>
+        <item><title>Cover post</title><link>https://example.com/cover-post</link>
+        <guid>cover-post</guid><author>Jane Doe</author>
+        <content:encoded><![CDATA[
+          <figure><img src="/cover.jpg" alt="A wide cover">
+          <figcaption>The cover caption.</figcaption></figure>
+          <p>The article body.</p>
+        ]]></content:encoded></item>
+      </channel></rss>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=rss.encode())
+
+    with mock_client(handler) as client:
+        fetch_feed(db_session, "https://example.com/frontmatter.xml", client=client)
+        db_session.commit()
+
+    item = db_session.scalar(select(Item))
+    assert item is not None
+    assert item.author == "Jane Doe"
+    assert item.cover_image == "https://example.com/cover.jpg"
+    assert item.cover_image_alt == "A wide cover"
+    assert item.cover_caption == "The cover caption."
+    assert item.content_html == "<p>The article body.</p>"
 
 
 def test_fetch_feed_records_http_errors(settings: Settings, db_session: Session) -> None:

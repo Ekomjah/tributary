@@ -87,6 +87,10 @@ class ItemOut(ORMModel):
     published: datetime | None = None
     content: str
     content_html: str | None = None
+    author: str | None = None
+    cover_image: str | None = None
+    cover_image_alt: str | None = None
+    cover_caption: str | None = None
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
@@ -103,6 +107,10 @@ class ItemOut(ORMModel):
 class ArticleFetchOut(BaseModel):
     id: int
     content_html: str | None = None
+    author: str | None = None
+    cover_image: str | None = None
+    cover_image_alt: str | None = None
+    cover_caption: str | None = None
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
