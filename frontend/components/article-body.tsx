@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { Loader2, Sparkles, TriangleAlert } from "lucide-react";
 
+import { ArticleImage, useArticleImages } from "@/components/article-image";
 import { hashtagHref, hashtagifyHtml, splitHashtags } from "@/lib/hashtags";
 import { contentBlocks } from "@/lib/text";
 import type { FetchStatus, Item } from "@/lib/types";
@@ -64,28 +65,24 @@ export default function ArticleBody({
     item.fetch_status !== null &&
     item.fetch_status !== "ok";
   const waitingForText = fetching && item.content_full === null;
+  const bodyRef = useArticleImages(bodyHtml);
   const coverImage = item.cover_image;
 
   return (
     <div className={className}>
       {coverImage && (
-        <figure className="article-cover">
-          {/* Remote covers come from arbitrary publishers; next/image needs a
-              fixed host allowlist, so the sanitized URL is used directly. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={coverImage}
-            alt={item.cover_image_alt || item.title || "Article cover"}
-            loading="eager"
-            decoding="async"
-            referrerPolicy="no-referrer"
-          />
-          {item.cover_caption && (
-            <figcaption>
+        <ArticleImage
+          key={coverImage}
+          src={coverImage}
+          alt={item.cover_image_alt || item.title || "Article cover"}
+          className="article-cover"
+          eager
+          caption={
+            item.cover_caption ? (
               <HashtagText text={item.cover_caption} />
-            </figcaption>
-          )}
-        </figure>
+            ) : undefined
+          }
+        />
       )}
 
       {item.summary && (
@@ -98,6 +95,7 @@ export default function ArticleBody({
       <div className="mt-7">
         {showHtml ? (
           <div
+            ref={bodyRef}
             className="article-html"
             dangerouslySetInnerHTML={{ __html: bodyHtml }}
           />

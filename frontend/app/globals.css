@@ -487,6 +487,188 @@
   }
 }
 
+/* Article images: hold a quiet block until the file arrives, then reveal it.
+   A failed image becomes a readable alt-text card instead of a broken icon. */
+.article-image-frame {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  margin: 1.9em auto;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+
+.article-image-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: var(--radius);
+}
+
+.article-image-frame[data-image-state="loading"] {
+  min-height: clamp(200px, 34vw, 420px);
+  border: 1px solid var(--divider);
+  background: var(--chrome);
+}
+
+.article-image-frame[data-image-state="loading"] img {
+  visibility: hidden;
+}
+
+.article-image-frame[data-image-variant="inline"] {
+  display: inline-block;
+  margin: 0 0.15em;
+  vertical-align: -0.15em;
+}
+
+.article-image-frame[data-image-variant="inline"] img {
+  display: inline-block;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.article-image-frame[data-image-variant="inline"][data-image-state="loading"] {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+.article-image-frame[data-image-state="loaded"] img {
+  animation: article-image-fade-in 180ms ease;
+}
+
+.article-image-placeholder {
+  display: none;
+}
+
+.article-image-frame[data-image-state="loading"] .article-image-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  color: var(--text-3);
+  font-family: var(--font-arimo), Arial, Helvetica, sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.article-image-frame[data-image-state="loading"]
+  .article-image-placeholder::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-3);
+  border-radius: 50%;
+  animation: article-image-spin 0.8s linear infinite;
+}
+
+.article-image-frame[data-image-state="error"] img {
+  display: none;
+}
+
+.article-image-fallback {
+  display: none;
+}
+
+.article-image-frame[data-image-state="error"] .article-image-fallback {
+  display: flex;
+  min-height: 120px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--chrome);
+  color: var(--text-2);
+  font-family: var(--font-arimo), Arial, Helvetica, sans-serif;
+  text-align: center;
+}
+
+.article-image-fallback-title {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.article-image-fallback-alt {
+  max-width: 52ch;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* A small inline image that fails should not turn a sentence into a card. */
+.article-image-frame[data-image-variant="inline"][data-image-state="error"]
+  .article-image-fallback {
+  display: inline-flex;
+  min-height: 0;
+  gap: 0.25rem;
+  padding: 0 0.15em;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  text-align: left;
+}
+
+.article-image-frame[data-image-variant="inline"][data-image-state="error"]
+  .article-image-fallback-title {
+  display: none;
+}
+
+.article-image-frame[data-image-variant="inline"][data-image-state="error"]
+  .article-image-fallback-alt {
+  display: inline;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.article-cover .article-image-frame {
+  margin: 0;
+}
+
+.article-cover .article-image-frame[data-image-state="loading"] {
+  min-height: clamp(220px, 38vw, 440px);
+}
+
+.article-cover .article-image-frame img {
+  width: 100%;
+}
+
+.article-html figure .article-image-frame {
+  margin: 0;
+}
+
+@keyframes article-image-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes article-image-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .article-image-frame[data-image-state="loading"]
+    .article-image-placeholder::before {
+    animation: none;
+  }
+}
+
 /* React Flow, tuned to the reader's square, monochrome surfaces. */
 .react-flow {
   --xy-background-color: var(--bg);
