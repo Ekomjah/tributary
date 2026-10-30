@@ -5,9 +5,14 @@ SHELL := /bin/bash
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
 
-.PHONY: help setup setup-api setup-client db-init \
+PG_CONTAINER := tributary-pg-test
+PG_PORT := 55432
+PG_URL := postgresql+psycopg://tributary:tributary@127.0.0.1:$(PG_PORT)/tributary_test
+
+.PHONY: help setup setup-api setup-client db-init db-migrate db-revision \
+	pg-start pg-stop db-init-postgres \
 	dev dev-api dev-client \
-	test-api lint-api format-api check-api \
+	test-api test-api-postgres lint-api format-api check-api \
 	lint-client typecheck-client test-client build-client check-client \
 	ci clean
 
@@ -23,8 +28,37 @@ setup-api: ## Install backend dependencies with uv
 setup-client: ## Install frontend dependencies with pnpm
 	cd $(FRONTEND_DIR) && pnpm install
 
-db-init: ## Create the SQLite database and tables
+db-init: ## Create the database and apply migrations
 	cd $(BACKEND_DIR) && uv run tributary init-db
+
+db-migrate: ## Apply pending Alembic migrations
+	cd $(BACKEND_DIR) && uv run tributary init-db
+
+db-revision: ## Autogenerate a migration (make db-revision m="add users")
+	cd $(BACKEND_DIR) && uv run alembic revision --autogenerate -m "$(m)"
+
+pg-start: ## Start a disposable PostgreSQL 16 for the Postgres suite
+	@docker rm -f $(PG_CONTAINER) >/dev/null 2>&1 || true
+	@docker run --rm -d --name $(PG_CONTAINER) \
+		-e POSTGRES_USER=tributary \
+		-e POSTGRES_PASSWORD=tributary \
+		-e POSTGRES_DB=tributary_test \
+		-p $(PG_PORT):5432 \
+		--tmpfs /var/lib/postgresql/data \
+		postgres:16-alpine >/dev/null
+	@for i in $$(seq 1 30); do \
+		if docker exec $(PG_CONTAINER) pg_isready -U tributary -d tributary_test \
+			>/dev/null 2>&1; then exit 0; fi; \
+		sleep 1; \
+	done; \
+	echo "PostgreSQL did not become ready on port $(PG_PORT)" >&2; exit 1
+
+pg-stop: ## Stop and remove the disposable PostgreSQL container
+	-@docker stop $(PG_CONTAINER) >/dev/null
+
+db-init-postgres: ## Apply migrations to the disposable PostgreSQL database
+	cd $(BACKEND_DIR) && DATABASE=postgres DATABASE_URL="$(PG_URL)" \
+		uv run tributary init-db
 
 dev: ## Run the API and the reader together
 	@$(MAKE) --no-print-directory -j2 dev-api dev-client
@@ -37,6 +71,9 @@ dev-client: ## Run the reader at http://localhost:3000
 
 test-api: ## Run the backend test suite
 	cd $(BACKEND_DIR) && uv run pytest
+
+test-api-postgres: pg-start ## Run the backend suite against PostgreSQL
+	cd $(BACKEND_DIR) && TRIBUTARY_TEST_DATABASE_URL="$(PG_URL)" uv run pytest
 
 lint-api: ## Lint the backend with ruff
 	cd $(BACKEND_DIR) && uv run ruff check .

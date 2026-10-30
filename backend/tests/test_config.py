@@ -8,6 +8,24 @@ from pydantic import ValidationError
 from tributary.config import ConfigurationError, Settings, get_settings
 
 _ENV_KEYS = (
+    "TRIBUTARY_DB_PATH",
+    "DB_PATH",
+    "DATABASE_URL",
+    "TRIBUTARY_DATABASE_URL",
+    "DATABASE",
+    "TRIBUTARY_DATABASE",
+    "MIGRATION_DATABASE_URL",
+    "TRIBUTARY_MIGRATION_DATABASE_URL",
+    "DATABASE_POOL_SIZE",
+    "TRIBUTARY_DATABASE_POOL_SIZE",
+    "DATABASE_MAX_OVERFLOW",
+    "TRIBUTARY_DATABASE_MAX_OVERFLOW",
+    "DATABASE_POOL_TIMEOUT",
+    "TRIBUTARY_DATABASE_POOL_TIMEOUT",
+    "DATABASE_POOL_RECYCLE",
+    "TRIBUTARY_DATABASE_POOL_RECYCLE",
+    "DATABASE_CONNECT_TIMEOUT",
+    "TRIBUTARY_DATABASE_CONNECT_TIMEOUT",
     "SENTRY_DSN",
     "TRIBUTARY_SENTRY_DSN",
     "SENTRY_ENABLED",
@@ -34,10 +52,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_settings_have_local_defaults(monkeypatch) -> None:
-    monkeypatch.delenv("TRIBUTARY_DB_PATH", raising=False)
-    monkeypatch.delenv("DB_PATH", raising=False)
-    monkeypatch.delenv("SENTRY_ENABLED", raising=False)
+def test_settings_have_local_defaults() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.app_name == "Tributary"
@@ -142,3 +157,149 @@ def test_db_path_can_be_overridden(monkeypatch, tmp_path: Path) -> None:
 
     assert settings.db_path == target.resolve()
     assert settings.database_url == f"sqlite:///{target.resolve().as_posix()}"
+
+
+def test_database_url_can_be_used_without_cloud_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@db.example.com:5432/tributary",
+    )
+    settings = Settings(_env_file=None)
+
+    assert settings.database_url == (
+        "postgresql+psycopg://user:pass@db.example.com:5432/tributary"
+    )
+    assert settings.database_label == (
+        "postgresql+psycopg://user:***@db.example.com:5432/tributary"
+    )
+    assert settings.database_backend == "postgresql"
+
+
+def test_database_selector_defaults_to_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.database == ""
+    assert settings.database_backend == "sqlite"
+    assert settings.migration_url == settings.database_url
+
+
+def test_database_selector_accepts_postgres_with_a_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE", "postgres")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@db.example.com:5432/tributary",
+    )
+
+    settings = Settings(_env_file=None)
+
+    assert settings.database == "postgres"
+    assert settings.database_backend == "postgresql"
+
+
+def test_database_postgres_requires_a_url() -> None:
+    with pytest.raises(ValidationError, match="DATABASE=postgres requires DATABASE_URL"):
+        Settings(_env_file=None, database="postgres")
+
+
+def test_database_selector_rejects_a_conflicting_url() -> None:
+    with pytest.raises(ValidationError, match="conflicts with the DATABASE_URL"):
+        Settings(
+            _env_file=None,
+            database="postgres",
+            database_url_override="sqlite:///local.db",
+        )
+
+    with pytest.raises(ValidationError, match="conflicts with the DATABASE_URL"):
+        Settings(
+            _env_file=None,
+            database="sqlite",
+            database_url_override="postgresql://u:p@host/db",
+        )
+
+
+def test_database_selector_rejects_unknown_values() -> None:
+    with pytest.raises(ValidationError, match="DATABASE must be"):
+        Settings(_env_file=None, database="mysql")
+
+
+def test_migration_database_url_uses_the_direct_host() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url_override=(
+            "postgresql://user:pass@"
+            "ep-example-pooler.eu-central-1.aws.neon.tech/tributary"
+        ),
+        migration_database_url=(
+            "postgres://user:pass@ep-example.eu-central-1.aws.neon.tech/tributary"
+        ),
+    )
+
+    assert settings.migration_database_url == (
+        "postgres://user:pass@ep-example.eu-central-1.aws.neon.tech/tributary"
+    )
+    assert settings.migration_url == (
+        "postgresql+psycopg://user:pass@"
+        "ep-example.eu-central-1.aws.neon.tech/tributary"
+    )
+    # The application still uses the pooled URL.
+    assert "pooler" in settings.database_url
+
+
+def test_migration_database_url_must_be_postgres() -> None:
+    with pytest.raises(ValidationError, match="MIGRATION_DATABASE_URL must be"):
+        Settings(_env_file=None, migration_database_url="sqlite:///local.db")
+
+
+def test_postgres_pool_defaults_are_conservative() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.database_pool_size == 5
+    assert settings.database_max_overflow == 5
+    assert settings.database_pool_timeout == 30.0
+    assert settings.database_pool_recycle == 300
+    assert settings.database_connect_timeout == 10
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "postgres://u:p@host:5432/db",
+            "postgresql+psycopg://u:p@host:5432/db",
+        ),
+        (
+            "postgresql://u:p@host:5432/db",
+            "postgresql+psycopg://u:p@host:5432/db",
+        ),
+        (
+            "postgresql+psycopg2://u:p@host:5432/db",
+            "postgresql+psycopg://u:p@host:5432/db",
+        ),
+        (
+            "postgresql+psycopg://u:p@host:5432/db",
+            "postgresql+psycopg://u:p@host:5432/db",
+        ),
+    ],
+)
+def test_postgres_urls_are_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", raw)
+    settings = Settings(_env_file=None)
+
+    assert settings.database_url == expected
+
+
+def test_database_url_rejects_unsupported_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "mysql://user:pass@host/db")
+
+    with pytest.raises(ValidationError, match="SQLite or PostgreSQL"):
+        Settings(_env_file=None)

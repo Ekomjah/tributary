@@ -19,6 +19,7 @@ def test_health_checks_the_database(client: TestClient, settings) -> None:
         "status": "ok",
         "app": "Tributary",
         "version": "0.1.0",
-        "database": str(settings.db_path),
+        "database": settings.database_label,
     }
-    assert settings.db_path.exists()
+    if settings.database_url.startswith("sqlite"):
+        assert settings.db_path.exists()

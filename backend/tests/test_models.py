@@ -18,6 +18,7 @@ from tributary.models import (
 )
 
 EXPECTED_TABLES = {
+    "alembic_version",
     "box_cache",
     "feeds",
     "item_labels",

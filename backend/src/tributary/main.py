@@ -25,7 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine(resolved_settings)
-        init_db(engine)
+        init_db(engine, resolved_settings)
         app.state.settings = resolved_settings
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
@@ -70,7 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status="ok",
             app=resolved_settings.app_name,
             version=resolved_settings.version,
-            database=str(resolved_settings.db_path),
+            database=resolved_settings.database_label,
         )
 
     for router in (

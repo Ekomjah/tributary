@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -8,8 +9,39 @@ from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from tributary import models  # noqa: F401  (registers Base.metadata)
 from tributary.config import Settings
-from tributary.db import create_engine, create_session_factory, init_db
+from tributary.db import (
+    Base,
+    create_engine,
+    create_session_factory,
+    init_db,
+)
+
+_MODE_ENV_KEYS = (
+    "DATABASE_URL",
+    "TRIBUTARY_DATABASE_URL",
+    "DATABASE",
+    "TRIBUTARY_DATABASE",
+    "MIGRATION_DATABASE_URL",
+    "TRIBUTARY_MIGRATION_DATABASE_URL",
+    "DATABASE_POOL_SIZE",
+    "TRIBUTARY_DATABASE_POOL_SIZE",
+    "DATABASE_MAX_OVERFLOW",
+    "TRIBUTARY_DATABASE_MAX_OVERFLOW",
+    "DATABASE_POOL_TIMEOUT",
+    "TRIBUTARY_DATABASE_POOL_TIMEOUT",
+    "DATABASE_POOL_RECYCLE",
+    "TRIBUTARY_DATABASE_POOL_RECYCLE",
+    "DATABASE_CONNECT_TIMEOUT",
+    "TRIBUTARY_DATABASE_CONNECT_TIMEOUT",
+)
+
+
+def _reset_non_sqlite_database(engine: Engine) -> None:
+    Base.metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
 
 
 @pytest.fixture(autouse=True)
@@ -30,20 +62,39 @@ def _fake_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
-    monkeypatch.setenv("TRIBUTARY_DB_PATH", str(tmp_path / "test.db"))
-    monkeypatch.delenv("DB_PATH", raising=False)
+    for key in _MODE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    test_database_url = os.environ.get("TRIBUTARY_TEST_DATABASE_URL")
+    if test_database_url:
+        monkeypatch.setenv("DATABASE_URL", test_database_url)
+        monkeypatch.delenv("TRIBUTARY_DB_PATH", raising=False)
+        monkeypatch.delenv("DB_PATH", raising=False)
+    else:
+        monkeypatch.setenv("TRIBUTARY_DB_PATH", str(tmp_path / "test.db"))
+        monkeypatch.delenv("DB_PATH", raising=False)
+
     monkeypatch.delenv("SENTRY_DSN", raising=False)
     monkeypatch.delenv("TRIBUTARY_SENTRY_DSN", raising=False)
     return Settings(_env_file=None)
 
 
 @pytest.fixture
+def database_backend(settings: Settings) -> str:
+    return "postgresql" if settings.database_url.startswith("postgresql") else "sqlite"
+
+
+@pytest.fixture
 def engine(settings: Settings) -> Iterator[Engine]:
     engine = create_engine(settings)
+    if engine.dialect.name != "sqlite":
+        _reset_non_sqlite_database(engine)
     init_db(engine)
     try:
         yield engine
     finally:
+        if engine.dialect.name != "sqlite":
+            _reset_non_sqlite_database(engine)
         engine.dispose()
 
 
@@ -62,7 +113,12 @@ def db_session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 
 @pytest.fixture
-def client(settings: Settings) -> Iterator[TestClient]:
+def client(settings: Settings, engine: Engine) -> Iterator[TestClient]:
+    """Start the app against an isolated schema.
+
+    ``engine`` is requested so the shared PostgreSQL database is reset around
+    each test, mirroring the fresh SQLite file each test gets locally.
+    """
     from tributary.main import create_app
 
     app = create_app(settings)

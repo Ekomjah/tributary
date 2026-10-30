@@ -6,11 +6,11 @@ from typing import Literal
 
 from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 BACKEND_ROOT = PACKAGE_DIR.parents[1]
 REPO_ROOT = PACKAGE_DIR.parents[2]
-
 
 class ConfigurationError(RuntimeError):
     """The environment configuration is invalid."""
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     app_name: str = "Tributary"
@@ -33,6 +34,74 @@ class Settings(BaseSettings):
         default=REPO_ROOT / "tributary.db",
         validation_alias=AliasChoices("TRIBUTARY_DB_PATH", "DB_PATH"),
     )
+    # Optional storage selector. Empty means "infer from DATABASE_URL, else
+    # SQLite". Set to ``postgres`` on a hosted deployment so a missing URL fails
+    # loudly instead of silently falling back to a throwaway SQLite file.
+    database: str = Field(
+        default="",
+        validation_alias=AliasChoices("DATABASE", "TRIBUTARY_DATABASE"),
+    )
+    # When set, DATABASE_URL wins over TRIBUTARY_DB_PATH. SQLite and PostgreSQL
+    # are supported; Render's postgres:// and postgresql:// forms as well as
+    # Neon's pooled URLs are normalized to the psycopg SQLAlchemy dialect.
+    database_url_override: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DATABASE_URL", "TRIBUTARY_DATABASE_URL"),
+    )
+    # Neon recommends running DDL over the direct (non-pooler) host. When set,
+    # Alembic and ``init-db`` use this URL while the application keeps using the
+    # pooled DATABASE_URL.
+    migration_database_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "MIGRATION_DATABASE_URL",
+            "TRIBUTARY_MIGRATION_DATABASE_URL",
+        ),
+    )
+    # PostgreSQL pool tuning. The defaults fit a single small Render instance
+    # talking to Neon; each worker owns at most pool_size + max_overflow
+    # connections.
+    database_pool_size: int = Field(
+        default=5,
+        ge=1,
+        validation_alias=AliasChoices(
+            "DATABASE_POOL_SIZE",
+            "TRIBUTARY_DATABASE_POOL_SIZE",
+        ),
+    )
+    database_max_overflow: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices(
+            "DATABASE_MAX_OVERFLOW",
+            "TRIBUTARY_DATABASE_MAX_OVERFLOW",
+        ),
+    )
+    database_pool_timeout: float = Field(
+        default=30.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "DATABASE_POOL_TIMEOUT",
+            "TRIBUTARY_DATABASE_POOL_TIMEOUT",
+        ),
+    )
+    database_pool_recycle: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices(
+            "DATABASE_POOL_RECYCLE",
+            "TRIBUTARY_DATABASE_POOL_RECYCLE",
+        ),
+    )
+    database_connect_timeout: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices(
+            "DATABASE_CONNECT_TIMEOUT",
+            "TRIBUTARY_DATABASE_CONNECT_TIMEOUT",
+        ),
+    )
+    # Local mode (the default) talks to Ollama on this machine.
     ollama_model: str = Field(
         default="gemma3:1b",
         validation_alias=AliasChoices("OLLAMA_MODEL", "TRIBUTARY_OLLAMA_MODEL"),
@@ -261,6 +330,48 @@ class Settings(BaseSettings):
             value = REPO_ROOT / value
         return value.expanduser().resolve()
 
+    @field_validator("database", mode="before")
+    @classmethod
+    def _clean_database_selector(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"", "auto"}:
+            return ""
+        if text in {"postgres", "postgresql"}:
+            return "postgres"
+        if text == "sqlite":
+            return "sqlite"
+        raise ValueError("DATABASE must be 'sqlite' or 'postgres'")
+
+    @field_validator("database_url_override", mode="before")
+    @classmethod
+    def _clean_database_url(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("database_url_override")
+    @classmethod
+    def _validate_database_url(cls, value: str | None) -> str | None:
+        if value is not None:
+            _normalize_database_url(value)
+        return value
+
+    @field_validator("migration_database_url", mode="before")
+    @classmethod
+    def _clean_migration_database_url(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("migration_database_url")
+    @classmethod
+    def _validate_migration_database_url(cls, value: str | None) -> str | None:
+        if value is not None:
+            _normalize_database_url(value)
+        return value
+
     @field_validator("ollama_api_key", mode="before")
     @classmethod
     def _clean_ollama_api_key(cls, value: object) -> str | None:
@@ -291,10 +402,48 @@ class Settings(BaseSettings):
         return text
 
     @model_validator(mode="after")
+    def _validate_storage_profile(self) -> Settings:
+        if self.database == "postgres" and self.database_url_override is None:
+            raise ValueError("DATABASE=postgres requires DATABASE_URL to be set")
+
+        if self.database_url_override is not None and self.database:
+            backend = make_url(self.database_url).get_backend_name()
+            expected = "postgresql" if self.database == "postgres" else "sqlite"
+            if backend != expected:
+                raise ValueError(
+                    f"DATABASE={self.database} conflicts with the "
+                    f"DATABASE_URL backend ({backend})"
+                )
+
+        if self.migration_database_url is not None:
+            backend = make_url(
+                _normalize_database_url(self.migration_database_url)
+            ).get_backend_name()
+            if backend != "postgresql":
+                raise ValueError("MIGRATION_DATABASE_URL must be a PostgreSQL URL")
+        return self
+
+    @model_validator(mode="after")
     def _validate_ollama_cloud(self) -> Settings:
         if self.ollama_cloud and not self.ollama_api_key:
             raise ValueError("OLLAMA_CLOUD=true requires OLLAMA_API_KEY")
         return self
+
+    @property
+    def database_backend(self) -> str:
+        """Return the effective SQLAlchemy backend name."""
+
+        if self.database_url_override:
+            return make_url(self.database_url).get_backend_name()
+        return "postgresql" if self.database == "postgres" else "sqlite"
+
+    @property
+    def migration_url(self) -> str:
+        """Return the URL used for DDL, preferring the direct Neon host."""
+
+        if self.migration_database_url:
+            return _normalize_database_url(self.migration_database_url)
+        return self.database_url
 
     @property
     def active_ollama_model(self) -> str:
@@ -316,7 +465,41 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.database_url_override:
+            return _normalize_database_url(self.database_url_override)
         return f"sqlite:///{self.db_path.as_posix()}"
+
+    @property
+    def database_label(self) -> str:
+        if self.database_url_override is None:
+            return str(self.db_path)
+        url = make_url(self.database_url)
+        if url.get_backend_name() == "sqlite":
+            return str(url.database)
+        return url.render_as_string(hide_password=True)
+
+
+
+def _normalize_database_url(value: str) -> str:
+    """Return a SQLAlchemy URL using the psycopg 3 dialect for PostgreSQL."""
+
+    text = value.strip()
+    if text.startswith("postgres://"):
+        text = "postgresql+psycopg://" + text[len("postgres://") :]
+    elif text.startswith("postgresql://"):
+        text = "postgresql+psycopg://" + text[len("postgresql://") :]
+    elif text.startswith("postgresql+psycopg2://"):
+        text = "postgresql+psycopg://" + text[len("postgresql+psycopg2://") :]
+
+    url = make_url(text)
+    backend = url.get_backend_name()
+    if backend not in {"sqlite", "postgresql"}:
+        raise ValueError(
+            f"DATABASE_URL must use SQLite or PostgreSQL, not {backend!r}"
+        )
+    if backend == "postgresql" and url.get_dialect().driver != "psycopg":
+        raise ValueError("PostgreSQL DATABASE_URL must use the psycopg driver")
+    return text
 
 
 def _format_validation_error(exc: ValidationError) -> str:

@@ -35,7 +35,12 @@ app = typer.Typer(
 def _settings_with_db_path(settings: Settings, db_path: Path | None) -> Settings:
     if db_path is None:
         return settings
-    return settings.model_copy(update={"db_path": db_path.expanduser().resolve()})
+    return settings.model_copy(
+        update={
+            "db_path": db_path.expanduser().resolve(),
+            "database_url_override": None,
+        }
+    )
 
 
 def _load_settings(db_path: Path | None = None) -> Settings:
@@ -124,6 +129,7 @@ def serve(
 
     if db is not None:
         os.environ["TRIBUTARY_DB_PATH"] = str(settings.db_path)
+        os.environ.pop("DATABASE_URL", None)
 
     if reload:
         uvicorn.run(
@@ -152,10 +158,10 @@ def init_database(
     settings = _load_settings(db)
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
     finally:
         engine.dispose()
-    typer.echo(f"Initialized database at {settings.db_path}")
+    typer.echo(f"Initialized database at {settings.database_label}")
 
 
 @app.command("discover")
@@ -506,13 +512,13 @@ def doctor(
                 or 0
             )
         typer.echo(
-            f"OK    database  {settings.db_path} "
+            f"OK    database  {settings.database_label} "
             f"({feed_count} feeds, {item_count} items, {labelled} labelled)"
         )
     except Exception as exc:
         failures += 1
         typer.echo(
-            f"FAIL  database  {settings.db_path}: {type(exc).__name__}",
+            f"FAIL  database  {settings.database_label}: {type(exc).__name__}",
             err=True,
         )
     finally:
