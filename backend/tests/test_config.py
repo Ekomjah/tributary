@@ -5,9 +5,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tributary.config import ConfigurationError, Settings, get_settings
+from tributary.config import (
+    DEFAULT_CORS_ORIGINS,
+    ConfigurationError,
+    Settings,
+    get_settings,
+)
 
 _ENV_KEYS = (
+    "DEV_ENV",
+    "TRIBUTARY_DEV_ENV",
     "TRIBUTARY_DB_PATH",
     "DB_PATH",
     "DATABASE_URL",
@@ -26,6 +33,16 @@ _ENV_KEYS = (
     "TRIBUTARY_DATABASE_POOL_RECYCLE",
     "DATABASE_CONNECT_TIMEOUT",
     "TRIBUTARY_DATABASE_CONNECT_TIMEOUT",
+    "AUTH0_DOMAIN",
+    "TRIBUTARY_AUTH0_DOMAIN",
+    "AUTH0_AUDIENCE",
+    "TRIBUTARY_AUTH0_AUDIENCE",
+    "AUTH0_CLIENT_ID",
+    "TRIBUTARY_AUTH0_CLIENT_ID",
+    "AUTH0_ALLOWED_SUBS",
+    "TRIBUTARY_AUTH0_ALLOWED_SUBS",
+    "CORS_ORIGINS",
+    "TRIBUTARY_CORS_ORIGINS",
     "SENTRY_DSN",
     "TRIBUTARY_SENTRY_DSN",
     "SENTRY_ENABLED",
@@ -52,19 +69,31 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
+def _cloud_settings(**overrides) -> Settings:
+    values = {
+        "dev_env": "production",
+        "database_url_override": "postgresql://user:pass@db.example.com:5432/tributary",
+        "auth0_domain": "example.auth0.com",
+        "auth0_audience": "https://api.example.com",
+        "auth0_client_id": "spa-client-id",
+        "cors_origins": "https://app.example.com",
+    }
+    values.update(overrides)
+    return Settings(_env_file=None, **values)
+
+
 def test_settings_have_local_defaults() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.app_name == "Tributary"
+    assert settings.is_cloud is False
     assert settings.ollama_model == "gemma3:1b"
     assert settings.sentry_enabled is True
     assert settings.sentry_traces_sample_rate > 0
     assert settings.fetch_timeout == 20.0
     assert settings.database_url.startswith("sqlite:///")
-    assert settings.cors_origins == [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    assert settings.allowed_cors_origins == DEFAULT_CORS_ORIGINS
+    assert settings.auth0_issuer is None
 
 
 def test_sentry_is_only_active_when_a_dsn_is_configured() -> None:
@@ -159,6 +188,14 @@ def test_db_path_can_be_overridden(monkeypatch, tmp_path: Path) -> None:
     assert settings.database_url == f"sqlite:///{target.resolve().as_posix()}"
 
 
+def test_empty_dev_env_stays_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEV_ENV", "  ")
+    settings = Settings(_env_file=None)
+
+    assert settings.dev_env == ""
+    assert settings.is_cloud is False
+
+
 def test_database_url_can_be_used_without_cloud_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -168,6 +205,7 @@ def test_database_url_can_be_used_without_cloud_mode(
     )
     settings = Settings(_env_file=None)
 
+    assert settings.is_cloud is False
     assert settings.database_url == (
         "postgresql+psycopg://user:pass@db.example.com:5432/tributary"
     )
@@ -227,8 +265,7 @@ def test_database_selector_rejects_unknown_values() -> None:
 
 
 def test_migration_database_url_uses_the_direct_host() -> None:
-    settings = Settings(
-        _env_file=None,
+    settings = _cloud_settings(
         database_url_override=(
             "postgresql://user:pass@"
             "ep-example-pooler.eu-central-1.aws.neon.tech/tributary"
@@ -303,3 +340,78 @@ def test_database_url_rejects_unsupported_backends(
 
     with pytest.raises(ValidationError, match="SQLite or PostgreSQL"):
         Settings(_env_file=None)
+
+
+def test_cloud_mode_requires_postgres_and_auth_zero() -> None:
+    with pytest.raises(ValidationError, match="DATABASE_URL"):
+        Settings(
+            _env_file=None,
+            dev_env="production",
+            auth0_domain="example.auth0.com",
+            auth0_audience="https://api.example.com",
+            auth0_client_id="spa-client-id",
+            cors_origins="https://app.example.com",
+        )
+
+    with pytest.raises(ValidationError, match="AUTH0_DOMAIN"):
+        Settings(
+            _env_file=None,
+            dev_env="production",
+            database_url_override="postgresql://u:p@host/db",
+            auth0_audience="https://api.example.com",
+            auth0_client_id="spa-client-id",
+            cors_origins="https://app.example.com",
+        )
+
+    with pytest.raises(ValidationError, match="PostgreSQL DATABASE_URL"):
+        _cloud_settings(database_url_override="sqlite:///local.db")
+
+
+def test_cloud_mode_requires_explicit_cors_origins() -> None:
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        _cloud_settings(cors_origins=None)
+
+
+def test_cloud_mode_accepts_a_complete_configuration() -> None:
+    settings = _cloud_settings(
+        auth0_domain="https://example.auth0.com/",
+        auth0_allowed_subs="auth0|one, auth0|two, auth0|one",
+    )
+
+    assert settings.is_cloud is True
+    assert settings.auth0_domain == "example.auth0.com"
+    assert settings.auth0_issuer == "https://example.auth0.com/"
+    assert settings.auth0_jwks_url == (
+        "https://example.auth0.com/.well-known/jwks.json"
+    )
+    assert settings.allowed_cors_origins == ["https://app.example.com"]
+    assert settings.auth0_allowed_subs == ["auth0|one", "auth0|two"]
+
+
+def test_cors_origins_accept_comma_separated_and_json_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "https://app.example.com/, https://preview.example.com",
+    )
+    settings = Settings(_env_file=None)
+    assert settings.allowed_cors_origins == [
+        "https://app.example.com",
+        "https://preview.example.com",
+    ]
+
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        '["https://one.example.com", "https://two.example.com"]',
+    )
+    settings = Settings(_env_file=None)
+    assert settings.allowed_cors_origins == [
+        "https://one.example.com",
+        "https://two.example.com",
+    ]
+
+
+def test_cors_origins_reject_wildcards() -> None:
+    with pytest.raises(ValidationError, match="explicit origins"):
+        Settings(_env_file=None, cors_origins="*")

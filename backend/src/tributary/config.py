@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import json
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 BACKEND_ROOT = PACKAGE_DIR.parents[1]
 REPO_ROOT = PACKAGE_DIR.parents[2]
+
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 
 class ConfigurationError(RuntimeError):
     """The environment configuration is invalid."""
@@ -30,6 +39,13 @@ class Settings(BaseSettings):
     app_name: str = "Tributary"
     version: str = "0.1.0"
 
+    # An unset or empty DEV_ENV keeps the account-free, self-hosted build.
+    # Any non-empty value opts into the hosted profile: PostgreSQL, Auth0 and
+    # an explicit browser origin are then required.
+    dev_env: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEV_ENV", "TRIBUTARY_DEV_ENV"),
+    )
     db_path: Path = Field(
         default=REPO_ROOT / "tributary.db",
         validation_alias=AliasChoices("TRIBUTARY_DB_PATH", "DB_PATH"),
@@ -318,10 +334,39 @@ class Settings(BaseSettings):
             "TRIBUTARY_SENTRY_MAX_REQUEST_BODY_SIZE",
         ),
     )
-    cors_origins: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    # Comma-separated or JSON list. Cloud mode requires this to be set
+    # explicitly so a deployment cannot silently keep the localhost default.
+    cors_origins: Annotated[list[str] | None, NoDecode] = Field(
+        default=None,
+        validation_alias=AliasChoices("CORS_ORIGINS", "TRIBUTARY_CORS_ORIGINS"),
+    )
+
+    auth0_domain: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AUTH0_DOMAIN", "TRIBUTARY_AUTH0_DOMAIN"),
+    )
+    auth0_audience: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AUTH0_AUDIENCE", "TRIBUTARY_AUTH0_AUDIENCE"),
+    )
+    auth0_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AUTH0_CLIENT_ID", "TRIBUTARY_AUTH0_CLIENT_ID"),
+    )
+    # Empty means any valid Auth0 token may use the deployment. A private beta
+    # can list Auth0 subject ids here to allow only invited accounts.
+    auth0_allowed_subs: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "AUTH0_ALLOWED_SUBS",
+            "TRIBUTARY_AUTH0_ALLOWED_SUBS",
+        ),
+    )
+
+    @field_validator("dev_env", mode="before")
+    @classmethod
+    def _clean_dev_env(cls, value: object) -> str:
+        return str(value or "").strip()
 
     @field_validator("db_path")
     @classmethod
@@ -401,6 +446,76 @@ class Settings(BaseSettings):
             raise ValueError("Ollama model and host values must not be empty")
         return text
 
+    @field_validator("cors_origins", "auth0_allowed_subs", mode="before")
+    @classmethod
+    def _split_env_list(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("["):
+                parsed = json.loads(text)
+                if not isinstance(parsed, list):
+                    raise ValueError("must be a JSON list or a comma-separated string")
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return [part.strip() for part in text.split(",") if part.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return value
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _validate_cors_origins(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for origin in value:
+            candidate = origin.rstrip("/")
+            if candidate == "*":
+                raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
+            parts = urlsplit(candidate)
+            if (
+                parts.scheme not in {"http", "https"}
+                or not parts.netloc
+                or parts.path
+                or parts.query
+                or parts.fragment
+                or parts.username is not None
+                or parts.password is not None
+            ):
+                raise ValueError(f"invalid CORS origin: {origin!r}")
+            if candidate not in cleaned:
+                cleaned.append(candidate)
+        return cleaned
+
+    @field_validator("auth0_domain", mode="before")
+    @classmethod
+    def _clean_auth0_domain(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        text = re.sub(r"^https?://", "", text, flags=re.IGNORECASE).rstrip("/")
+        if not text or "/" in text:
+            raise ValueError("AUTH0_DOMAIN must be a tenant hostname")
+        return text
+
+    @field_validator("auth0_audience", "auth0_client_id", mode="before")
+    @classmethod
+    def _clean_auth0_value(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("auth0_allowed_subs")
+    @classmethod
+    def _dedupe_allowed_subs(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
+
     @model_validator(mode="after")
     def _validate_storage_profile(self) -> Settings:
         if self.database == "postgres" and self.database_url_override is None:
@@ -424,10 +539,38 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_cloud_profile(self) -> Settings:
+        if not self.is_cloud:
+            return self
+
+        missing = [
+            name
+            for name, value in (
+                ("DATABASE_URL", self.database_url_override),
+                ("AUTH0_DOMAIN", self.auth0_domain),
+                ("AUTH0_AUDIENCE", self.auth0_audience),
+                ("AUTH0_CLIENT_ID", self.auth0_client_id),
+                ("CORS_ORIGINS", self.cors_origins),
+            )
+            if not value
+        ]
+        if missing:
+            joined = ", ".join(missing)
+            raise ValueError(f"DEV_ENV enables cloud mode; set {joined}")
+
+        if self.database_backend != "postgresql":
+            raise ValueError("cloud mode requires a PostgreSQL DATABASE_URL")
+        return self
+
+    @model_validator(mode="after")
     def _validate_ollama_cloud(self) -> Settings:
         if self.ollama_cloud and not self.ollama_api_key:
             raise ValueError("OLLAMA_CLOUD=true requires OLLAMA_API_KEY")
         return self
+
+    @property
+    def is_cloud(self) -> bool:
+        return bool(self.dev_env)
 
     @property
     def database_backend(self) -> str:
@@ -478,6 +621,21 @@ class Settings(BaseSettings):
             return str(url.database)
         return url.render_as_string(hide_password=True)
 
+    @property
+    def allowed_cors_origins(self) -> list[str]:
+        return list(self.cors_origins or DEFAULT_CORS_ORIGINS)
+
+    @property
+    def auth0_issuer(self) -> str | None:
+        if not self.auth0_domain:
+            return None
+        return f"https://{self.auth0_domain}/"
+
+    @property
+    def auth0_jwks_url(self) -> str | None:
+        if not self.auth0_issuer:
+            return None
+        return f"{self.auth0_issuer}.well-known/jwks.json"
 
 
 def _normalize_database_url(value: str) -> str:
