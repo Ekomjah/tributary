@@ -38,6 +38,8 @@ _ENV_KEYS = (
     "SENTRY_MAX_REQUEST_BODY_SIZE",
     "TRIBUTARY_SENTRY_MAX_REQUEST_BODY_SIZE",
     "SERPAPI_API_KEY",
+    "OLLAMA_API_KEY",
+    "TRIBUTARY_OLLAMA_API_KEY",
 )
 
 
@@ -194,6 +196,28 @@ def test_scrubber_accepts_the_hint_and_redacts_secrets(monkeypatch) -> None:
         {},
     )
     assert log["body"] == "api_key=[Filtered]"
+
+
+def test_scrubber_redacts_the_ollama_api_key(monkeypatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: calls.append(kwargs))
+    _clear_sentry_env(monkeypatch)
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.com/1")
+    monkeypatch.setenv("OLLAMA_API_KEY", "cloud-secret-key")
+
+    init_sentry(Settings(_env_file=None))
+
+    scrub = calls[0]["before_send"]
+    scrubbed = scrub(
+        {
+            "message": "Authorization: Bearer cloud-secret-key",
+            "extra": {"key": "cloud-secret-key"},
+        },
+        {},
+    )
+
+    assert "cloud-secret-key" not in str(scrubbed)
+    assert scrubbed["extra"]["key"] == "[Filtered]"
 
 
 def test_scrubber_strips_url_queries_and_credentials(monkeypatch) -> None:

@@ -48,11 +48,14 @@ def _make_scrubber(secrets: Iterable[str] = ()):
 
 
 def init_sentry(settings: Settings) -> None:
-    """Enable Sentry unless the user opts out.
+    """Enable Sentry only when a DSN is configured.
 
-    Sentry only transmits when a DSN is configured. Keeping the switch on by
-    default means deployments that provide a DSN get errors, traces, profiles,
-    logs, custom metrics and GenAI spans without extra setup.
+    Without SENTRY_DSN the SDK is never initialized, so every span, metric,
+    exception and log call is a local no-op. The app runs normally without
+    tracing or telemetry. When a DSN is present, errors, traces, profiles,
+    logs, custom metrics and GenAI spans are enabled; tracing follows
+    SENTRY_TRACES_SAMPLE_RATE, so an explicit 0 keeps error reporting on while
+    turning tracing off.
 
     Data collection defaults to what is useful for monitoring this app:
     request bodies, headers and query strings are captured (with the SDK's
@@ -66,10 +69,14 @@ def init_sentry(settings: Settings) -> None:
         return
 
     if not settings.sentry_dsn:
-        logger.info("Sentry is enabled but SENTRY_DSN is not set; telemetry is inactive")
+        logger.info(
+            "Sentry inactive: SENTRY_DSN is not set; tracing and error reporting are off"
+        )
         return
 
-    scrub = _make_scrubber([settings.serpapi_api_key or ""])
+    scrub = _make_scrubber(
+        [settings.serpapi_api_key or "", settings.ollama_api_key or ""]
+    )
 
     sentry_sdk.init(
         dsn=settings.sentry_dsn,

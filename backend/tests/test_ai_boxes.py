@@ -395,6 +395,82 @@ def test_ollama_client_records_gen_ai_io(monkeypatch) -> None:
     assert span.data[SPANDATA.GEN_AI_USAGE_TOTAL_TOKENS] == 16
 
 
+def test_ollama_client_uses_cloud_settings_and_auth_header(monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=True,
+        ollama_api_key="cloud-key",
+        ollama_model="local:1b",
+        ollama_host="http://local:11434",
+    )
+    captured: dict[str, Any] = {}
+    fake_client = SimpleNamespace()
+
+    def make_client(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(model_service.ollama, "Client", make_client)
+
+    client = OllamaModelClient.from_settings(settings)
+
+    assert client.model == "gemma4:3b"
+    assert client.host == "https://ollama.com"
+    assert captured["host"] == "https://ollama.com"
+    assert captured["headers"] == {"Authorization": "Bearer cloud-key"}
+
+
+def test_ollama_client_uses_local_settings_without_auth(monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=False,
+        ollama_api_key="unused-key",
+        ollama_model="gemma3:1b",
+        ollama_host="http://localhost:11434",
+    )
+    captured: dict[str, Any] = {}
+
+    def make_client(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(model_service.ollama, "Client", make_client)
+
+    client = OllamaModelClient.from_settings(settings)
+
+    assert client.model == "gemma3:1b"
+    assert client.host == "http://localhost:11434"
+    assert captured["headers"] == {}
+
+
+def test_check_ollama_uses_cloud_auth_and_host(monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=True,
+        ollama_api_key="cloud-key",
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def list(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                models=[SimpleNamespace(model="gemma4:3b")]
+            )
+
+    monkeypatch.setattr(model_service.ollama, "Client", FakeClient)
+
+    reachable, detail, names = model_service.check_ollama(settings)
+
+    assert reachable is True
+    assert detail == "reachable at https://ollama.com"
+    assert names == ["gemma4:3b"]
+    assert captured["host"] == "https://ollama.com"
+    assert captured["headers"] == {"Authorization": "Bearer cloud-key"}
+
+
 def test_ollama_client_can_omit_gen_ai_content(monkeypatch) -> None:
     client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
     client._client = SimpleNamespace(  # type: ignore[assignment]

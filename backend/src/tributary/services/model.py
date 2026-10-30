@@ -36,19 +36,31 @@ def _is_repeat_abort(exc: ollama.ResponseError) -> bool:
     return _REPEAT_LIMIT in str(getattr(exc, "error", "") or "").lower()
 
 
-def _describe_failure(exc: Exception, *, host: str, timeout: float) -> str:
+def _describe_failure(
+    exc: Exception,
+    *,
+    host: str,
+    timeout: float,
+    cloud: bool = False,
+) -> str:
     """Name the real failure instead of always blaming availability."""
 
+    service = "Ollama Cloud" if cloud else "Ollama"
     if isinstance(exc, ollama.ResponseError):
         detail = str(getattr(exc, "error", "") or "").strip()
         status = getattr(exc, "status_code", "?")
-        message = f"Ollama at {host} rejected the request ({status})"
+        message = f"{service} at {host} rejected the request ({status})"
         return f"{message}: {detail}" if detail else f"{message}."
     if isinstance(exc, (ConnectionError, httpx.ConnectError, httpx.ConnectTimeout)):
+        if cloud:
+            return (
+                f"Could not reach {service} at {host}; "
+                "check OLLAMA_API_KEY and network access."
+            )
         return f"Could not reach Ollama at {host}. Is it running?"
     if isinstance(exc, httpx.TimeoutException):
-        return f"Ollama at {host} did not finish within {timeout:g}s."
-    return f"Ollama call failed: {type(exc).__name__}: {exc}"
+        return f"{service} at {host} did not finish within {timeout:g}s."
+    return f"{service} call failed: {type(exc).__name__}: {exc}"
 
 
 def _collect_gen_ai(kind: str) -> bool:
@@ -95,22 +107,35 @@ class ModelClient(Protocol):
 
 @dataclass(slots=True)
 class OllamaModelClient:
-    """Talk to a local Ollama server with structured output."""
+    """Talk to a local or cloud Ollama server with structured output."""
 
     model: str
     host: str
     timeout: float = 120.0
+    api_key: str | None = field(default=None, repr=False)
+    cloud: bool = False
     _client: ollama.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._client = ollama.Client(host=self.host, timeout=self.timeout)
+        headers = (
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key
+            else {}
+        )
+        self._client = ollama.Client(
+            host=self.host,
+            timeout=self.timeout,
+            headers=headers,
+        )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> OllamaModelClient:
         return cls(
-            model=settings.ollama_model,
-            host=settings.ollama_host,
+            model=settings.active_ollama_model,
+            host=settings.active_ollama_host,
             timeout=settings.ollama_timeout,
+            api_key=settings.ollama_api_key if settings.ollama_cloud else None,
+            cloud=settings.ollama_cloud,
         )
 
     def generate_json(
@@ -151,7 +176,12 @@ class OllamaModelClient:
 
             def fail(exc: Exception) -> NoReturn:
                 span.set_status("internal_error")
-                message = _describe_failure(exc, host=self.host, timeout=self.timeout)
+                message = _describe_failure(
+                    exc,
+                    host=self.host,
+                    timeout=self.timeout,
+                    cloud=self.cloud,
+                )
                 logger.warning("Ollama call failed: %s", message)
                 raise ModelError(message) from exc
 
@@ -207,16 +237,22 @@ class OllamaModelClient:
 
 
 def check_ollama(settings: Settings) -> tuple[bool, str, list[str]]:
-    """Return (reachable, detail, installed model names) for ``doctor``."""
+    """Return (reachable, detail, available model names) for ``doctor``."""
 
+    if settings.ollama_cloud and not settings.ollama_api_key:
+        return False, "OLLAMA_CLOUD=true requires OLLAMA_API_KEY", []
+
+    host = settings.active_ollama_host
     try:
         client = ollama.Client(
-            host=settings.ollama_host,
+            host=host,
             timeout=min(settings.ollama_timeout, 5.0),
+            headers=settings.ollama_auth_headers,
         )
         response = client.list()
     except Exception as exc:
-        return False, f"cannot reach {settings.ollama_host} ({type(exc).__name__})", []
+        target = f"Ollama Cloud at {host}" if settings.ollama_cloud else host
+        return False, f"cannot reach {target} ({type(exc).__name__})", []
 
     names = sorted(
         {
@@ -225,4 +261,4 @@ def check_ollama(settings: Settings) -> tuple[bool, str, list[str]]:
         }
         - {""}
     )
-    return True, f"reachable at {settings.ollama_host}", names
+    return True, f"reachable at {host}", names

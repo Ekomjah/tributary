@@ -13,7 +13,7 @@ Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to m
 - **Pipes.** Chain Fetch, Search, Merge, Dedupe, Filter, Sort, Limit and Full text boxes. Build a pipe by dragging boxes at `/pipes`, or save and share it as a small JSON file you can edit by hand.
 - **Reader.** Unread/read, starred, labels and filters, with keyboard shortcuts (`j`/`k` to move, `s` to star, `m` to mark read).
 - **Full text.** When a feed sends only an excerpt, Tributary fetches the article once, cleans it with trafilatura, and keeps it for offline reading.
-- **Local model.** Summarize each item, filter by meaning ("keep only items about databases, drop hype") and explain why a story might matter, all through Ollama on your machine.
+- **Local model.** Summarize each item, filter by meaning ("keep only items about databases, drop hype") and explain why a story might matter, all through Ollama on your machine by default. Set `OLLAMA_CLOUD=true` to use Ollama Cloud instead.
 - **Search.** Ask for news or web results in plain language. The local model rewrites the request into search parameters, SerpAPI runs it, and the results become a search feed in the sidebar. It is off unless you add a key.
 - **Visual editor.** Drag boxes onto a canvas, wire them into a chain, preview the refined search query, then save and run the pipe without leaving the browser.
 - **Local first.** Feeds, stars and labels live in one SQLite file. The API and reader run on your machine. No accounts.
@@ -60,6 +60,11 @@ ollama pull gemma3:1b
 uv run tributary doctor
 ```
 
+For Ollama Cloud instead, set `OLLAMA_CLOUD=true` and `OLLAMA_API_KEY` in
+`.env`. Cloud mode uses `gemma4:3b` at `https://ollama.com` and does not need a
+local model pull. `OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` override those
+defaults.
+
 Search needs a [SerpAPI](https://serpapi.com) key in `.env`:
 
 ```bash
@@ -105,7 +110,7 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [Filter] -> [Sort] -> [Limit] -> read
 - **Engine:** Python, FastAPI, feedparser, trafilatura, SQLAlchemy, SQLite.
 - **Reader:** Next.js with React. The API and reader run as two local processes during development.
 - **Pipes:** JSON files. `tributary run` executes one from the CLI; the API saves and runs them, and the React Flow editor at `/pipes` writes the same spec.
-- **AI boxes:** Summarize, Filter by meaning and Why you'd care call Ollama on the same machine and cache each answer in SQLite.
+- **AI boxes:** Summarize, Filter by meaning and Why you'd care call Ollama and cache each answer in SQLite. The default is the local Ollama instance; cloud mode sends prompts to Ollama Cloud instead.
 - **Search:** the Search box and `tributary search` ask Ollama to refine the request, call SerpAPI, then store the results under a virtual `search://` feed. Those feeds appear under **Searches** in the sidebar and stay out of All items, Unread and Starred. A search is cached for six hours.
 
 ## Configuration
@@ -115,17 +120,21 @@ Copy `.env.example` to `.env`. Nothing is required for basic use.
 | Variable                      | Purpose                                                          | Default                  |
 | ----------------------------- | ---------------------------------------------------------------- | ------------------------ |
 | `TRIBUTARY_DB_PATH`           | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
-| `OLLAMA_MODEL`                | Model used by the AI boxes                                       | `gemma3:1b`              |
-| `OLLAMA_HOST`                 | Ollama address                                                   | `http://localhost:11434` |
+| `OLLAMA_CLOUD`                | Use Ollama Cloud instead of the local Ollama server              | `false`                  |
+| `OLLAMA_API_KEY`              | Ollama Cloud API key; required when `OLLAMA_CLOUD=true`          | unset                    |
+| `OLLAMA_CLOUD_MODEL`          | Model used in cloud mode                                         | `gemma4:3b`              |
+| `OLLAMA_CLOUD_HOST`           | Cloud mode endpoint                                              | `https://ollama.com`     |
+| `OLLAMA_MODEL`                | Model used by the AI boxes in local mode                         | `gemma3:1b`              |
+| `OLLAMA_HOST`                 | Local Ollama address                                             | `http://localhost:11434` |
 | `OLLAMA_TIMEOUT`              | Seconds before a model call times out                            | `120`                    |
 | `SERPAPI_API_KEY`             | SerpAPI key. Search is off when empty                            | unset                    |
 | `SERPAPI_ENGINE`              | Default search engine: `google_news` or `google`                 | `google_news`            |
 | `SERPAPI_MAX_RESULTS`         | Results per search, 1 to 20                                      | `10`                     |
 | `SERPAPI_CACHE_TTL`           | Seconds a search result stays cached                             | `21600`                  |
 | `SERPAPI_TIMEOUT`             | Seconds before a SerpAPI request times out                       | `20`                     |
-| `SENTRY_DSN`                  | Sentry project DSN. Monitoring is on by default once this is set | sample in `.env.example` |
-| `SENTRY_ENABLED`              | Set to `false` to opt out of Sentry                              | `true`                   |
-| `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1                            | `0.25`                   |
+| `SENTRY_DSN`                  | Sentry project DSN. Leave empty to run without Sentry or tracing | unset (opt-in)           |
+| `SENTRY_ENABLED`              | Hard opt-out; a DSN alone enables Sentry                         | `true`                   |
+| `SENTRY_TRACES_SAMPLE_RATE`   | Share of requests traced, from 0 to 1; 0 keeps errors on         | `0.25`                   |
 | `SENTRY_PROFILES_SAMPLE_RATE` | Share of traces profiled, from 0 to 1                            | `0.1`                    |
 | `SENTRY_COLLECT_GEN_AI`       | Capture model prompts and responses in GenAI spans               | `true`                   |
 | `SENTRY_COLLECT_HTTP_BODIES`  | Capture request and response bodies                              | `true`                   |
@@ -136,17 +145,27 @@ The rest of the Sentry switches (`SENTRY_SEND_USER_INFO`, `SENTRY_COLLECT_HTTP_H
 | `TRIBUTARY_FETCH_TIMEOUT`     | Seconds before a feed request times out                          | `20`                     |
 | `NEXT_PUBLIC_API_BASE`        | API address used by the reader                                   | `http://127.0.0.1:8000`  |
 
+### Ollama modes
+
+Local Ollama is the default. Set `OLLAMA_CLOUD=true` and `OLLAMA_API_KEY` to
+send AI calls to Ollama Cloud at `https://ollama.com` with `gemma4:3b`.
+`OLLAMA_MODEL` and `OLLAMA_HOST` apply only to local mode; use
+`OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` to change the cloud defaults. If
+your account exposes the model under a different tag, set
+`OLLAMA_CLOUD_MODEL` to that exact tag. The app refuses to start in cloud mode
+without a key, and `doctor` explains what is missing.
+
 ## Privacy
 
 - Your feeds, stars and labels stay on your machine in a local SQLite file.
 - When a feed only sends an excerpt, Tributary fetches the article page directly from the publisher, from your machine, the first time you open that item. The request carries Tributary's User-Agent and no account, cookies or reading history. The page is cleaned to text and cached in your local database.
-- Article text is not sent to a cloud service. The AI boxes use the local Ollama instance, and only extracted article text is sent to it.
-- Sentry is on by default when `SENTRY_DSN` is set; set `SENTRY_ENABLED=false` to opt out. It receives errors, traces, profiles, logs, feed metrics and GenAI spans. With the monitoring defaults it also receives request bodies, headers, database query data, stack variables and model prompts/responses; cookies, GraphQL and queues stay off. API keys and URL query strings are redacted, and every category can be turned off with the `SENTRY_COLLECT_*` switches.
-- The Search box is off unless `SERPAPI_API_KEY` is configured. When it runs, your request is refined by the local Ollama instance, then only the refined query, engine, locale and freshness go to SerpAPI, never article text or reading history. Results are stored in your local database and cached for six hours.
+- In local mode (the default), article text is not sent to a cloud service. The AI boxes use the local Ollama instance, and only extracted article text is sent to it. In cloud mode (`OLLAMA_CLOUD=true`), extracted article text and prompts are sent to Ollama Cloud instead.
+- Sentry is opt-in through `SENTRY_DSN`. Without a DSN no Sentry client is initialized and no errors, traces, logs or metrics leave the process. With a DSN it receives errors, traces, profiles, logs, feed metrics and GenAI spans; set `SENTRY_ENABLED=false` for a hard opt-out. With the monitoring defaults it also receives request bodies, headers, database query data, stack variables and model prompts/responses; cookies, GraphQL and queues stay off. API keys and URL query strings are redacted, and every category can be turned off with the `SENTRY_COLLECT_*` switches.
+- The Search box is off unless `SERPAPI_API_KEY` is configured. When it runs, your request is refined by the configured Ollama instance (local or cloud), then only the refined query, engine, locale and freshness go to SerpAPI, never article text or reading history. Results are stored in your local database and cached for six hours.
 
 ## Monitoring
 
-Sentry is enabled by default when a DSN is configured. Feed refreshes record duration, new-item counts and failures as errors and metrics. Search records request, cache-hit and error counts plus latency; API keys and URL query strings are redacted from every event. A pipe run is one trace with a span per box. AI boxes and query refinement emit `gen_ai.chat` spans with the model, token counts and, when `SENTRY_COLLECT_GEN_AI=true`, the prompts and responses. Set `SENTRY_ENABLED=false` to turn all of it off.
+Sentry is opt-in through `SENTRY_DSN`. Without a DSN the app runs without a Sentry client, so no errors, traces, logs, metrics or GenAI spans are sent. With a DSN, feed refreshes record duration, new-item counts and failures as errors and metrics. Search records request, cache-hit and error counts plus latency; API keys and URL query strings are redacted from every event. A pipe run is one trace with a span per box. AI boxes and query refinement emit `gen_ai.chat` spans with the model, token counts and, when `SENTRY_COLLECT_GEN_AI=true`, the prompts and responses. `SENTRY_TRACES_SAMPLE_RATE=0` keeps error reporting on while turning tracing off; `SENTRY_ENABLED=false` turns all of it off.
 
 ## Deployment
 

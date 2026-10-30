@@ -4,12 +4,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 BACKEND_ROOT = PACKAGE_DIR.parents[1]
 REPO_ROOT = PACKAGE_DIR.parents[2]
+
+
+class ConfigurationError(RuntimeError):
+    """The environment configuration is invalid."""
 
 
 class Settings(BaseSettings):
@@ -36,6 +40,31 @@ class Settings(BaseSettings):
     ollama_host: str = Field(
         default="http://localhost:11434",
         validation_alias=AliasChoices("OLLAMA_HOST", "TRIBUTARY_OLLAMA_HOST"),
+    )
+    # Cloud mode is opt-in and uses its own host/model so stale local values in
+    # .env do not silently keep the app pointed at localhost.
+    ollama_cloud: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("OLLAMA_CLOUD", "TRIBUTARY_OLLAMA_CLOUD"),
+    )
+    ollama_api_key: str | None = Field(
+        default=None,
+        repr=False,
+        validation_alias=AliasChoices("OLLAMA_API_KEY", "TRIBUTARY_OLLAMA_API_KEY"),
+    )
+    ollama_cloud_model: str = Field(
+        default="gemma4:3b",
+        validation_alias=AliasChoices(
+            "OLLAMA_CLOUD_MODEL",
+            "TRIBUTARY_OLLAMA_CLOUD_MODEL",
+        ),
+    )
+    ollama_cloud_host: str = Field(
+        default="https://ollama.com",
+        validation_alias=AliasChoices(
+            "OLLAMA_CLOUD_HOST",
+            "TRIBUTARY_OLLAMA_CLOUD_HOST",
+        ),
     )
     ollama_timeout: float = Field(
         default=120.0,
@@ -232,11 +261,83 @@ class Settings(BaseSettings):
             value = REPO_ROOT / value
         return value.expanduser().resolve()
 
+    @field_validator("ollama_api_key", mode="before")
+    @classmethod
+    def _clean_ollama_api_key(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("sentry_dsn", mode="before")
+    @classmethod
+    def _clean_sentry_dsn(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator(
+        "ollama_model",
+        "ollama_host",
+        "ollama_cloud_model",
+        "ollama_cloud_host",
+    )
+    @classmethod
+    def _validate_ollama_endpoint_value(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Ollama model and host values must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def _validate_ollama_cloud(self) -> Settings:
+        if self.ollama_cloud and not self.ollama_api_key:
+            raise ValueError("OLLAMA_CLOUD=true requires OLLAMA_API_KEY")
+        return self
+
+    @property
+    def active_ollama_model(self) -> str:
+        return self.ollama_cloud_model if self.ollama_cloud else self.ollama_model
+
+    @property
+    def active_ollama_host(self) -> str:
+        return self.ollama_cloud_host if self.ollama_cloud else self.ollama_host
+
+    @property
+    def ollama_auth_headers(self) -> dict[str, str]:
+        if not self.ollama_cloud or not self.ollama_api_key:
+            return {}
+        return {"Authorization": f"Bearer {self.ollama_api_key}"}
+
+    @property
+    def sentry_active(self) -> bool:
+        return self.sentry_enabled and bool(self.sentry_dsn)
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.db_path.as_posix()}"
 
 
+def _format_validation_error(exc: ValidationError) -> str:
+    """Turn pydantic's multi-line error into a single startup message."""
+
+    messages: list[str] = []
+    for error in exc.errors():
+        message = str(error.get("msg", "")).strip()
+        prefix = "Value error, "
+        if message.startswith(prefix):
+            message = message[len(prefix) :]
+        location = ".".join(
+            str(part) for part in error.get("loc", ()) if part != "__root__"
+        )
+        messages.append(f"{location}: {message}" if location else message)
+    return "; ".join(messages) or "invalid configuration"
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise ConfigurationError(_format_validation_error(exc)) from exc

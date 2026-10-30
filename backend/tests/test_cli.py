@@ -7,7 +7,7 @@ import httpx
 from typer.testing import CliRunner
 
 from tributary.cli import app
-from tributary.config import Settings
+from tributary.config import ConfigurationError, Settings
 from tributary.db import create_engine, create_session_factory, init_db, session_scope
 from tributary.models import Feed, Item
 from tributary.services import discovery, feeds, refine
@@ -385,6 +385,118 @@ def test_doctor_warns_when_the_model_is_missing(
 
     assert result.exit_code == 0
     assert "ollama pull gemma3:1b" in result.output
+
+
+def test_doctor_reports_a_configuration_error_cleanly(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail() -> Settings:
+        raise ConfigurationError("OLLAMA_CLOUD=true requires OLLAMA_API_KEY")
+
+    monkeypatch.setattr("tributary.cli.get_settings", fail)
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 1
+    assert (
+        "Configuration error: OLLAMA_CLOUD=true requires OLLAMA_API_KEY"
+        in result.output
+    )
+
+
+def test_doctor_reports_cloud_ollama_mode(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=True,
+        ollama_api_key="cloud-key",
+        sentry_enabled=False,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (
+            True,
+            "reachable at https://ollama.com",
+            ["gemma4:3b"],
+        ),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "OK    ollama cloud" in result.output
+    assert "gemma4:3b" in result.output
+    assert "ollama pull" not in result.output
+
+
+def test_doctor_cloud_model_missing_does_not_suggest_a_local_pull(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=True,
+        ollama_api_key="cloud-key",
+        sentry_enabled=False,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (True, "reachable at https://ollama.com", ["other:1b"]),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "OLLAMA_CLOUD_MODEL" in result.output
+    assert "ollama pull" not in result.output
+
+
+def test_doctor_treats_a_missing_sentry_dsn_as_inactive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        sentry_dsn=None,
+        sentry_enabled=True,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("tributary.cli.init_sentry", lambda settings: None)
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (True, "reachable at test", ["gemma3:1b"]),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "OK    sentry    inactive" in result.output
+    assert "WARN  sentry" not in result.output
+
+
+def test_doctor_honors_an_explicit_tracing_opt_out(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        sentry_dsn="https://public@example.com/1",
+        sentry_enabled=True,
+        sentry_traces_sample_rate=0,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("tributary.cli.init_sentry", lambda settings: None)
+    monkeypatch.setattr(
+        "tributary.cli.model.check_ollama",
+        lambda settings: (True, "reachable at test", ["gemma3:1b"]),
+    )
+
+    result = runner.invoke(app, ["doctor", "--db", str(tmp_path / "cli.db")])
+
+    assert result.exit_code == 0
+    assert "errors on, tracing off" in result.output
 
 
 def test_search_refines_and_shows_the_query(tmp_path: Path, monkeypatch) -> None:

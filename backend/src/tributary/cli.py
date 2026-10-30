@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from . import __version__
 from .boxes import BoxError, PipeSpecError, RunContext, load_pipe_spec
 from .boxes import run_pipe as execute_pipe
-from .config import Settings, get_settings
+from .config import ConfigurationError, Settings, get_settings
 from .db import create_engine, create_session_factory, init_db, session_scope
 from .models import Feed, Item
 from .observability import init_sentry
@@ -40,7 +40,11 @@ def _settings_with_db_path(settings: Settings, db_path: Path | None) -> Settings
 
 def _load_settings(db_path: Path | None = None) -> Settings:
     global _SENTRY_READY
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except ConfigurationError as exc:
+        typer.echo(f"Configuration error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if not _SENTRY_READY:
         init_sentry(settings)
         _SENTRY_READY = True
@@ -514,18 +518,31 @@ def doctor(
     finally:
         engine.dispose()
 
+    ollama_label = "ollama cloud" if settings.ollama_cloud else "ollama"
+    ollama_model = settings.active_ollama_model
     reachable, detail, installed = model.check_ollama(settings)
     if not reachable:
+        hint = (
+            "check OLLAMA_API_KEY and network access"
+            if settings.ollama_cloud
+            else "the AI boxes will fail"
+        )
         typer.echo(
-            f"WARN  ollama    {detail}; the AI boxes will fail",
+            f"WARN  {ollama_label:<12} {detail}; {hint}",
             err=True,
         )
-    elif _model_installed(settings.ollama_model, installed):
-        typer.echo(f"OK    ollama    {settings.ollama_model} ({detail})")
+    elif _model_installed(ollama_model, installed):
+        typer.echo(f"OK    {ollama_label:<12} {ollama_model} ({detail})")
+    elif settings.ollama_cloud:
+        typer.echo(
+            f"WARN  {ollama_label:<12} model {ollama_model!r} is not listed "
+            "for this account; set OLLAMA_CLOUD_MODEL to the exact cloud tag",
+            err=True,
+        )
     else:
         typer.echo(
-            f"WARN  ollama    model {settings.ollama_model!r} is not installed; "
-            f"run `ollama pull {settings.ollama_model}`",
+            f"WARN  {ollama_label:<12} model {ollama_model!r} is not installed; "
+            f"run `ollama pull {ollama_model}`",
             err=True,
         )
 
@@ -539,10 +556,19 @@ def doctor(
 
     if not settings.sentry_enabled:
         typer.echo("OK    sentry    disabled by SENTRY_ENABLED=false")
-    elif settings.sentry_dsn:
-        typer.echo("OK    sentry    enabled")
+    elif not settings.sentry_active:
+        typer.echo("OK    sentry    inactive (SENTRY_DSN not set; tracing off)")
+    elif settings.sentry_traces_sample_rate > 0:
+        typer.echo(
+            "OK    sentry    tracing on "
+            f"(environment={settings.sentry_environment}, "
+            f"sample={settings.sentry_traces_sample_rate:g})"
+        )
     else:
-        typer.echo("WARN  sentry    enabled but SENTRY_DSN is empty")
+        typer.echo(
+            "OK    sentry    errors on, tracing off "
+            "(SENTRY_TRACES_SAMPLE_RATE=0)"
+        )
 
     if failures:
         raise typer.Exit(code=1)
