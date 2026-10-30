@@ -17,10 +17,19 @@ from .services.urls import redact_urls_in_text
 logger = logging.getLogger(__name__)
 
 _API_KEY = re.compile(r"(api[_-]?key=)[^&\s\"']+", re.IGNORECASE)
+_SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "proxy-authorization",
+        "set-cookie",
+        "x-api-key",
+    }
+)
 
 
 def _scrub(value: Any, secrets: tuple[str, ...] = ()) -> Any:
-    """Redact API keys and known secret values from Sentry payloads."""
+    """Redact API keys, bearer headers and known secret values from Sentry payloads."""
 
     if isinstance(value, str):
         cleaned = _API_KEY.sub(r"\1[Filtered]", value)
@@ -28,9 +37,30 @@ def _scrub(value: Any, secrets: tuple[str, ...] = ()) -> Any:
             cleaned = cleaned.replace(secret, "[Filtered]")
         return redact_urls_in_text(cleaned)
     if isinstance(value, dict):
-        return {key: _scrub(entry, secrets) for key, entry in value.items()}
+        return {
+            key: (
+                "[Filtered]"
+                if str(key).lower() in _SENSITIVE_HEADERS
+                else _scrub(entry, secrets)
+            )
+            for key, entry in value.items()
+        }
     if isinstance(value, list):
-        return [_scrub(entry, secrets) for entry in value]
+        cleaned_list: list[Any] = []
+        for entry in value:
+            if (
+                isinstance(entry, (list, tuple))
+                and len(entry) == 2
+                and str(entry[0]).lower() in _SENSITIVE_HEADERS
+            ):
+                cleaned_list.append(
+                    [entry[0], "[Filtered]"]
+                    if isinstance(entry, list)
+                    else (entry[0], "[Filtered]")
+                )
+            else:
+                cleaned_list.append(_scrub(entry, secrets))
+        return cleaned_list
     if isinstance(value, tuple):
         return tuple(_scrub(entry, secrets) for entry in value)
     return value
