@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
-from ..models import Label
+from ..models import Label, normalize_label_name
 from ..schemas import LabelCreate, LabelOut
 from .deps import DbSession
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 
 @router.get("", response_model=list[LabelOut])
 def list_labels(db: DbSession) -> list[Label]:
-    return list(db.scalars(select(Label).order_by(Label.name)).all())
+    return list(db.scalars(select(Label).order_by(Label.name_key)).all())
 
 
 @router.post("", response_model=LabelOut, status_code=status.HTTP_201_CREATED)
@@ -21,7 +21,9 @@ def create_label(payload: LabelCreate, db: DbSession) -> Label:
     if not name:
         raise HTTPException(status_code=422, detail="Label name cannot be blank")
 
-    existing = db.scalar(select(Label).where(Label.name == name))
+    existing = db.scalar(
+        select(Label).where(Label.name_key == normalize_label_name(name))
+    )
     if existing is not None:
         raise HTTPException(status_code=409, detail="That label already exists")
 

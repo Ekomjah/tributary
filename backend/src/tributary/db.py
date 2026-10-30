@@ -26,7 +26,7 @@ NAMING_CONVENTION = {
 }
 
 BASELINE_REVISION = "0001_baseline"
-HEAD_REVISION = "0001_baseline"
+HEAD_REVISION = "0002_label_name_key"
 
 
 class Base(DeclarativeBase):

@@ -68,6 +68,7 @@ def test_models_round_trip(db_session: Session) -> None:
     assert item.feed is feed
     assert feed.items == [item]
     assert item.labels == [label]
+    assert label.name_key == "python"
     assert label.items == [item]
     assert item.box_cache == [cache]
     assert cache.item is item

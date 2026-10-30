@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import Feed, Item, Label, pipe_feed_items
+from ..models import Feed, Item, Label, normalize_label_name, pipe_feed_items
 from ..schemas import ArticleFetchOut, Decision, ItemOut, ItemPage, ItemUpdate
 from ..services import articles
 from .deps import DbSession
@@ -42,7 +42,9 @@ def _item_query(
         # not mixed into All items, Unread or Starred.
         stmt = stmt.where(Item.feed.has(Feed.kind != "search"))
     if label:
-        stmt = stmt.where(Item.labels.any(Label.name == label))
+        stmt = stmt.where(
+            Item.labels.any(Label.name_key == normalize_label_name(label))
+        )
     if decision is not None:
         stmt = stmt.where(Item.decision == decision)
     if q:

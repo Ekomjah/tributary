@@ -17,9 +17,15 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from .db import Base, UTCDateTime, utcnow
+
+
+def normalize_label_name(name: str) -> str:
+    """Return the case-insensitive key used for label uniqueness."""
+
+    return name.strip().casefold()
 
 item_labels = Table(
     "item_labels",
@@ -121,16 +127,19 @@ class Label(Base):
     __tablename__ = "labels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(
-        String(100, collation="NOCASE"),
-        unique=True,
-        nullable=False,
-    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Stored explicitly so case-insensitive uniqueness works on PostgreSQL too.
+    name_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
 
     items: Mapped[list[Item]] = relationship(
         secondary=item_labels,
         back_populates="labels",
     )
+
+    @validates("name")
+    def _set_name_key(self, key: str, value: str) -> str:
+        self.name_key = normalize_label_name(value)
+        return value
 
     def __repr__(self) -> str:
         return f"Label(id={self.id!r}, name={self.name!r})"
