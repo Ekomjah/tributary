@@ -1,7 +1,7 @@
 # Tributary backend
 
-FastAPI engine for Tributary: SQLite storage, feed fetching, the pipe engine, and
-the JSON API used by the reader and editor.
+FastAPI engine for Tributary: SQLite or PostgreSQL storage, feed fetching, the
+pipe engine, and the JSON API used by the reader and editor.
 
 ## Setup
 
@@ -18,7 +18,17 @@ to override defaults. The CLI is built with Typer; `uv run tributary --help` lis
 every command. Sentry is enabled by default once `SENTRY_DSN` is set; set
 `SENTRY_ENABLED=false` to opt out. Monitoring captures request data, stack
 variables and GenAI prompts/responses by default; each category has a
-`SENTRY_COLLECT_*` switch, and secrets are redacted.
+`SENTRY_COLLECT_*` switch, and authorization/cookie headers plus known secrets
+are redacted.
+
+SQLite is the default. Set `DATABASE_URL` to a PostgreSQL URL to use Postgres
+instead; Render's `postgres://` form is normalized automatically. `DATABASE=postgres`
+makes a missing URL a startup error. On Neon, keep the pooled URL in
+`DATABASE_URL` and the direct host in `MIGRATION_DATABASE_URL` so migrations run
+outside PgBouncer. Schema changes live in `migrations/` and run through Alembic
+at startup or with `uv run tributary init-db`. Set `DEV_ENV` to a non-empty value
+only when the PostgreSQL, Auth0 and CORS settings for the cloud profile are
+present.
 
 The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 
@@ -59,8 +69,8 @@ uv run ruff check .
 
 ```text
 src/tributary/
-  config.py      settings and repository paths
-  db.py          engine, sessions, SQLite pragmas, UTC timestamp type
+  config.py      settings, local/cloud profile and repository paths
+  db.py          engine, sessions, migrations, UTC timestamp type
   models.py      Feed, Item, Label, Pipe, Run, BoxCache, SearchCache
   schemas.py     Pydantic request/response models
   main.py        FastAPI app factory
