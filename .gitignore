@@ -6,6 +6,8 @@
 *.sqlite
 *.sqlite3
 
+.env.cloud.example
+
 # Python
 __pycache__/
 *.py[cod]
