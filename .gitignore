@@ -33,3 +33,7 @@ desc.md
 
 # Editor/OS noise
 .DS_Store
+.neon
+node_modules/
+
+.agents/

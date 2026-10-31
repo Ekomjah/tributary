@@ -160,10 +160,12 @@ make pg-stop             # stop and remove it
 ```
 
 On Neon, use two URLs. `DATABASE_URL` uses the pooled `-pooler` host, and
-`MIGRATION_DATABASE_URL` uses the direct host. DDL runs on the direct connection
-while the application keeps its pooled connections; both URLs should include
-`sslmode=require`. PostgreSQL pool sizing and idle-connection recovery are
-controlled by `DATABASE_POOL_*` and `DATABASE_CONNECT_TIMEOUT`.
+`DATABASE_URL_UNPOOLED` uses the direct host. `neon env pull` writes both names;
+the app uses the unpooled URL for migrations automatically, and
+`MIGRATION_DATABASE_URL` is an explicit override. DDL runs on the direct
+connection while the application keeps its pooled connections; both URLs should
+include `sslmode=require`. PostgreSQL pool sizing and idle-connection recovery
+are controlled by `DATABASE_POOL_*` and `DATABASE_CONNECT_TIMEOUT`.
 
 | Variable                         | Purpose                                                          | Default                  |
 | -------------------------------- | ---------------------------------------------------------------- | ------------------------ |
@@ -171,17 +173,20 @@ controlled by `DATABASE_POOL_*` and `DATABASE_CONNECT_TIMEOUT`.
 | `TRIBUTARY_DB_PATH`              | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
 | `DATABASE`                       | Optional selector: `sqlite` or `postgres`; empty infers from URL | empty (SQLite)           |
 | `DATABASE_URL`                   | PostgreSQL or SQLite URL; overrides `TRIBUTARY_DB_PATH`          | unset                    |
-| `MIGRATION_DATABASE_URL`         | Direct PostgreSQL URL used only for migrations and DDL           | unset (uses URL above)   |
+| `DATABASE_URL_UNPOOLED`          | Neon's direct URL, used automatically for migrations              | unset                    |
+| `MIGRATION_DATABASE_URL`         | Explicit override for the DDL/migration URL                      | unset                    |
 | `DATABASE_POOL_SIZE`             | PostgreSQL pool size per process                                 | `5`                      |
 | `DATABASE_MAX_OVERFLOW`          | Extra PostgreSQL connections above the pool size                 | `5`                      |
 | `DATABASE_POOL_TIMEOUT`          | Seconds to wait for a pooled connection                          | `30`                     |
 | `DATABASE_POOL_RECYCLE`          | Seconds before a pooled connection is replaced                   | `300`                    |
 | `DATABASE_CONNECT_TIMEOUT`       | Seconds before a PostgreSQL connect attempt fails                | `10`                     |
 | `CORS_ORIGINS`                   | Browser origins, comma-separated or JSON                         | localhost:3000 locally   |
+| `CORS_ORIGIN_REGEX`              | Optional anchored regex for preview origins                      | unset                    |
 | `AUTH0_DOMAIN`                   | Auth0 tenant hostname                                            | unset                    |
 | `AUTH0_AUDIENCE`                 | Auth0 API audience requested by the SPA                          | unset                    |
 | `AUTH0_CLIENT_ID`                | Auth0 SPA client ID                                              | unset                    |
 | `AUTH0_ALLOWED_SUBS`             | Optional comma-separated subject allowlist for a private beta    | empty (all valid users)  |
+| `AUTH0_ALLOWED_EMAILS`           | Optional verified-email allowlist for a private beta              | empty (all valid users)  |
 | `OLLAMA_CLOUD`                   | Use Ollama Cloud instead of the local Ollama server              | `false`                  |
 | `OLLAMA_API_KEY`                 | Ollama Cloud API key; required when `OLLAMA_CLOUD=true`          | unset                    |
 | `OLLAMA_CLOUD_MODEL`             | Model used in cloud mode                                         | `gemma4:3b`              |
@@ -241,10 +246,14 @@ Neon provides PostgreSQL; Render runs the API. Render Free has an ephemeral
 filesystem, so all durable state must live in Neon. No persistent disk is
 needed.
 
+The repository includes `neon.ts` and a git-ignored `.neon` link. With the CLI
+signed in, `neon deploy` applies the policy to the linked `production` branch,
+then pulls `DATABASE_URL`, `DATABASE_URL_UNPOOLED` and `NEON_BRANCH` into `.env`.
+
 1. Create a Neon project on the Free plan in the region closest to the Render
-   service. In the dashboard, copy both connection strings: the pooled one
-   (host contains `-pooler`) and the direct one. Append `sslmode=require` if it
-   is not already present.
+   service, or reuse the linked one. `neon deploy` provisions the branch; the
+   pooled URL is in `DATABASE_URL` and the direct URL is in
+   `DATABASE_URL_UNPOOLED`. Keep `sslmode=require` on both.
 2. Create a Render Web Service from this repository.
    - Root directory: `backend`
    - Build command: `pip install uv && uv sync --frozen --no-dev`
@@ -256,7 +265,7 @@ needed.
    | ------------------------ | ------------------------------------------------- |
    | `DATABASE`               | `postgres`                                        |
    | `DATABASE_URL`           | Neon pooled (`-pooler`) connection string         |
-   | `MIGRATION_DATABASE_URL` | Neon direct connection string                     |
+   | `DATABASE_URL_UNPOOLED`  | Neon direct connection string used for migrations |
    | `CORS_ORIGINS`           | The Vercel reader origin, for example `https://app.example.com` |
    | `SERPAPI_API_KEY`        | Optional; search stays off when empty             |
    | `OLLAMA_CLOUD`           | `true` with `OLLAMA_API_KEY` to use Ollama Cloud  |
@@ -266,7 +275,7 @@ needed.
    library, so do not put private data in it or expose it as a multi-user
    service yet.
 4. Deploy. The first boot applies the Alembic migrations over
-   `MIGRATION_DATABASE_URL`; later boots check the revision and are cheap. You
+   `DATABASE_URL_UNPOOLED`; later boots check the revision and are cheap. You
    can run the same migration by hand from the Render shell with
    `uv run tributary init-db`.
 5. On Vercel, deploy `frontend` with `NEXT_PUBLIC_API_BASE` set to the Render
@@ -292,8 +301,9 @@ The root `Makefile` wraps the common commands:
 
 ```bash
 make setup       # install backend and frontend dependencies
-make dev         # run the API and reader together
-make dev-api     # API only, at http://127.0.0.1:8000
+make dev         # run the API (local SQLite) and reader together
+make dev-api     # API only, local SQLite, at http://127.0.0.1:8000
+make dev-api-postgres # API against the disposable PostgreSQL database
 make dev-client  # reader only, at http://localhost:3000
 make test-api    # backend tests (SQLite)
 make test-api-postgres # backend tests against postgres:16-alpine

@@ -19,6 +19,7 @@ _ENV_KEYS = (
     "DB_PATH",
     "DATABASE_URL",
     "TRIBUTARY_DATABASE_URL",
+    "DATABASE_URL_UNPOOLED",
     "DATABASE",
     "TRIBUTARY_DATABASE",
     "MIGRATION_DATABASE_URL",
@@ -41,8 +42,12 @@ _ENV_KEYS = (
     "TRIBUTARY_AUTH0_CLIENT_ID",
     "AUTH0_ALLOWED_SUBS",
     "TRIBUTARY_AUTH0_ALLOWED_SUBS",
+    "AUTH0_ALLOWED_EMAILS",
+    "TRIBUTARY_AUTH0_ALLOWED_EMAILS",
     "CORS_ORIGINS",
     "TRIBUTARY_CORS_ORIGINS",
+    "CORS_ORIGIN_REGEX",
+    "TRIBUTARY_CORS_ORIGIN_REGEX",
     "SENTRY_DSN",
     "TRIBUTARY_SENTRY_DSN",
     "SENTRY_ENABLED",
@@ -291,6 +296,27 @@ def test_migration_database_url_must_be_postgres() -> None:
         Settings(_env_file=None, migration_database_url="sqlite:///local.db")
 
 
+def test_neon_unpooled_url_is_used_for_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@ep-example-pooler.eu-central-1.aws.neon.tech/tributary",
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL_UNPOOLED",
+        "postgresql://user:pass@ep-example.eu-central-1.aws.neon.tech/tributary",
+    )
+
+    settings = Settings(_env_file=None)
+
+    assert "pooler" in settings.database_url
+    assert settings.migration_url == (
+        "postgresql+psycopg://user:pass@"
+        "ep-example.eu-central-1.aws.neon.tech/tributary"
+    )
+
+
 def test_postgres_pool_defaults_are_conservative() -> None:
     settings = Settings(_env_file=None)
 
@@ -376,6 +402,8 @@ def test_cloud_mode_accepts_a_complete_configuration() -> None:
     settings = _cloud_settings(
         auth0_domain="https://example.auth0.com/",
         auth0_allowed_subs="auth0|one, auth0|two, auth0|one",
+        auth0_allowed_emails="Ada@Example.com, ada@example.com, grace@example.com",
+        cors_origin_regex=r"^https://tributary-[a-z0-9-]+\.vercel\.app$",
     )
 
     assert settings.is_cloud is True
@@ -386,6 +414,37 @@ def test_cloud_mode_accepts_a_complete_configuration() -> None:
     )
     assert settings.allowed_cors_origins == ["https://app.example.com"]
     assert settings.auth0_allowed_subs == ["auth0|one", "auth0|two"]
+    assert settings.auth0_allowed_emails == [
+        "ada@example.com",
+        "grace@example.com",
+    ]
+    assert settings.cors_origin_regex == (
+        r"^https://tributary-[a-z0-9-]+\.vercel\.app$"
+    )
+
+
+def test_cors_origin_regex_is_validated() -> None:
+    with pytest.raises(ValidationError, match="valid regex"):
+        Settings(_env_file=None, cors_origin_regex="[")
+    with pytest.raises(ValidationError, match="anchor an http"):
+        Settings(_env_file=None, cors_origin_regex=r"https://.*\.vercel\.app$")
+    with pytest.raises(ValidationError, match="every origin"):
+        Settings(_env_file=None, cors_origin_regex=r"^https://.*$")
+
+
+def test_auth0_allowed_emails_are_normalized() -> None:
+    settings = Settings(
+        _env_file=None,
+        auth0_allowed_emails=" Ada@Example.com , grace@example.com ",
+    )
+
+    assert settings.auth0_allowed_emails == [
+        "ada@example.com",
+        "grace@example.com",
+    ]
+
+    with pytest.raises(ValidationError, match="invalid AUTH0_ALLOWED_EMAILS"):
+        Settings(_env_file=None, auth0_allowed_emails="not-an-email")
 
 
 def test_cors_origins_accept_comma_separated_and_json_lists(

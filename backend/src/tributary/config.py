@@ -64,14 +64,16 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("DATABASE_URL", "TRIBUTARY_DATABASE_URL"),
     )
-    # Neon recommends running DDL over the direct (non-pooler) host. When set,
-    # Alembic and ``init-db`` use this URL while the application keeps using the
-    # pooled DATABASE_URL.
+    # Neon recommends running DDL over the direct (non-pooler) host. Neon's
+    # `neon env pull` writes that as DATABASE_URL_UNPOOLED; MIGRATION_DATABASE_URL
+    # is the explicit override. Alembic and ``init-db`` use this URL while the
+    # application keeps using the pooled DATABASE_URL.
     migration_database_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
             "MIGRATION_DATABASE_URL",
             "TRIBUTARY_MIGRATION_DATABASE_URL",
+            "DATABASE_URL_UNPOOLED",
         ),
     )
     # PostgreSQL pool tuning. The defaults fit a single small Render instance
@@ -340,6 +342,17 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("CORS_ORIGINS", "TRIBUTARY_CORS_ORIGINS"),
     )
+    # Optional pattern for preview deployments, for example
+    # ``^https://tributary-[a-z0-9-]+\\.vercel\\.app$``. Kept separate from
+    # CORS_ORIGINS so production can name exact origins while previews use a
+    # narrowly scoped pattern.
+    cors_origin_regex: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CORS_ORIGIN_REGEX",
+            "TRIBUTARY_CORS_ORIGIN_REGEX",
+        ),
+    )
 
     auth0_domain: str | None = Field(
         default=None,
@@ -360,6 +373,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "AUTH0_ALLOWED_SUBS",
             "TRIBUTARY_AUTH0_ALLOWED_SUBS",
+        ),
+    )
+    # Optional email allowlist. Auth0 access tokens only contain an email claim
+    # when an Action adds one; the backend additionally requires
+    # ``email_verified`` before accepting it.
+    auth0_allowed_emails: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "AUTH0_ALLOWED_EMAILS",
+            "TRIBUTARY_AUTH0_ALLOWED_EMAILS",
         ),
     )
 
@@ -446,7 +469,12 @@ class Settings(BaseSettings):
             raise ValueError("Ollama model and host values must not be empty")
         return text
 
-    @field_validator("cors_origins", "auth0_allowed_subs", mode="before")
+    @field_validator(
+        "cors_origins",
+        "auth0_allowed_subs",
+        "auth0_allowed_emails",
+        mode="before",
+    )
     @classmethod
     def _split_env_list(cls, value: object) -> list[str] | None:
         if value is None:
@@ -503,6 +531,32 @@ class Settings(BaseSettings):
             raise ValueError("AUTH0_DOMAIN must be a tenant hostname")
         return text
 
+    @field_validator("cors_origin_regex", mode="before")
+    @classmethod
+    def _clean_cors_origin_regex(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("cors_origin_regex")
+    @classmethod
+    def _validate_cors_origin_regex(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            re.compile(value)
+        except re.error as exc:
+            raise ValueError(f"CORS_ORIGIN_REGEX is not a valid regex: {exc}") from exc
+        if not value.startswith(("^http://", "^https://")):
+            raise ValueError(
+                "CORS_ORIGIN_REGEX must anchor an http(s) origin, for example "
+                "^https://app-[a-z0-9-]+\\.vercel\\.app$"
+            )
+        if value in {"^.*$", "^https?://.*$", "^https://.*$"}:
+            raise ValueError("CORS_ORIGIN_REGEX must not allow every origin")
+        return value
+
     @field_validator("auth0_audience", "auth0_client_id", mode="before")
     @classmethod
     def _clean_auth0_value(cls, value: object) -> str | None:
@@ -515,6 +569,18 @@ class Settings(BaseSettings):
     @classmethod
     def _dedupe_allowed_subs(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(value))
+
+    @field_validator("auth0_allowed_emails")
+    @classmethod
+    def _normalize_allowed_emails(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for entry in value:
+            email = entry.strip().lower()
+            if "@" not in email or email.startswith("@") or email.endswith("@"):
+                raise ValueError(f"invalid AUTH0_ALLOWED_EMAILS entry: {entry!r}")
+            if email not in cleaned:
+                cleaned.append(email)
+        return cleaned
 
     @model_validator(mode="after")
     def _validate_storage_profile(self) -> Settings:
