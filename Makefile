@@ -4,6 +4,7 @@ SHELL := /bin/bash
 
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
+DB_PATH := $(CURDIR)/tributary.db
 
 PG_CONTAINER := tributary-pg-test
 PG_PORT := 55432
@@ -11,7 +12,7 @@ PG_URL := postgresql+psycopg://tributary:tributary@127.0.0.1:$(PG_PORT)/tributar
 
 .PHONY: help setup setup-api setup-client db-init db-migrate db-revision \
 	pg-start pg-stop db-init-postgres \
-	dev dev-api dev-client \
+	dev dev-api dev-api-postgres dev-client \
 	test-api test-api-postgres lint-api format-api check-api \
 	lint-client typecheck-client test-client build-client check-client \
 	ci clean
@@ -28,11 +29,11 @@ setup-api: ## Install backend dependencies with uv
 setup-client: ## Install frontend dependencies with pnpm
 	cd $(FRONTEND_DIR) && pnpm install
 
-db-init: ## Create the database and apply migrations
-	cd $(BACKEND_DIR) && uv run tributary init-db
+db-init: ## Create the local SQLite database and apply migrations
+	cd $(BACKEND_DIR) && uv run tributary init-db --db "$(DB_PATH)"
 
-db-migrate: ## Apply pending Alembic migrations
-	cd $(BACKEND_DIR) && uv run tributary init-db
+db-migrate: ## Apply pending Alembic migrations to the local SQLite database
+	cd $(BACKEND_DIR) && uv run tributary init-db --db "$(DB_PATH)"
 
 db-revision: ## Autogenerate a migration (make db-revision m="add users")
 	cd $(BACKEND_DIR) && uv run alembic revision --autogenerate -m "$(m)"
@@ -63,8 +64,12 @@ db-init-postgres: ## Apply migrations to the disposable PostgreSQL database
 dev: ## Run the API and the reader together
 	@$(MAKE) --no-print-directory -j2 dev-api dev-client
 
-dev-api: db-init ## Run the API at http://127.0.0.1:8000
-	cd $(BACKEND_DIR) && uv run tributary serve
+dev-api: db-init ## Run the API against local SQLite at http://127.0.0.1:8000
+	cd $(BACKEND_DIR) && uv run tributary serve --db "$(DB_PATH)"
+
+dev-api-postgres: db-init-postgres ## Run the API against the disposable PostgreSQL database
+	cd $(BACKEND_DIR) && DATABASE=postgres DATABASE_URL="$(PG_URL)" \
+		uv run tributary serve
 
 dev-client: ## Run the reader at http://localhost:3000
 	cd $(FRONTEND_DIR) && pnpm dev
