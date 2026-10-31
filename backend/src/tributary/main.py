@@ -4,11 +4,12 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from .api import feeds, items, labels, pipes, refine, runs, search_source
+from .api import feeds, items, labels, me, pipes, refine, runs, search_source
+from .api.security import get_current_user
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
 from .observability import init_sentry
@@ -41,6 +42,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=resolved_settings.app_name,
         version=resolved_settings.version,
         lifespan=lifespan,
+        docs_url=None if resolved_settings.is_cloud else "/docs",
+        redoc_url=None if resolved_settings.is_cloud else "/redoc",
+        openapi_url=None if resolved_settings.is_cloud else "/openapi.json",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -52,11 +56,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     @app.get("/", tags=["meta"])
-    def root() -> dict[str, str]:
+    def root() -> dict[str, str | None]:
         return {
             "name": resolved_settings.app_name,
             "version": resolved_settings.version,
-            "docs": "/docs",
+            "docs": None if resolved_settings.is_cloud else "/docs",
         }
 
     @app.get("/health", response_model=HealthOut, tags=["meta"])
@@ -75,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     for router in (
+        me.router,
         feeds.router,
         items.router,
         labels.router,
@@ -83,7 +88,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runs.router,
         search_source.router,
     ):
-        app.include_router(router, prefix="/api")
+        app.include_router(
+            router,
+            prefix="/api",
+            dependencies=[Depends(get_current_user)],
+        )
 
     return app
 

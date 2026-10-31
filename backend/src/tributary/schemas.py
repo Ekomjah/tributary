@@ -236,3 +236,10 @@ class HealthOut(BaseModel):
     app: str
     version: str
     database: str
+
+
+class MeOut(BaseModel):
+    id: int
+    email: str | None = None
+    name: str | None = None
+    mode: Literal["local", "cloud"]

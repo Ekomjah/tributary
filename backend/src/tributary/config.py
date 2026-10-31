@@ -366,6 +366,17 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("AUTH0_CLIENT_ID", "TRIBUTARY_AUTH0_CLIENT_ID"),
     )
+    # Clock tolerance for exp/iat/nbf. Keep small; the default covers normal
+    # clock drift between Auth0 and the API host.
+    auth0_leeway_seconds: int = Field(
+        default=60,
+        ge=0,
+        le=300,
+        validation_alias=AliasChoices(
+            "AUTH0_LEEWAY_SECONDS",
+            "TRIBUTARY_AUTH0_LEEWAY_SECONDS",
+        ),
+    )
     # Empty means any valid Auth0 token may use the deployment. A private beta
     # can list Auth0 subject ids here to allow only invited accounts.
     auth0_allowed_subs: Annotated[list[str], NoDecode] = Field(
