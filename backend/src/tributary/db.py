@@ -4,18 +4,22 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from alembic import command
 from alembic.config import Config
 from fastapi import Request
-from sqlalchemy import DateTime, MetaData, event, inspect
+from sqlalchemy import DateTime, MetaData, event, inspect, select
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
 from .config import BACKEND_ROOT, Settings
+
+if TYPE_CHECKING:
+    from .models import User
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -26,7 +30,26 @@ NAMING_CONVENTION = {
 }
 
 BASELINE_REVISION = "0001_baseline"
-HEAD_REVISION = "0002_label_name_key"
+HEAD_REVISION = "0003_users"
+# Internal foreign-key anchor for account-free local installs. It is not an
+# account and is never accepted in cloud mode.
+LOCAL_AUTH0_SUB = "local"
+# Tables that existed at the baseline revision. A pre-Alembic SQLite file may
+# be missing one of these; create_all fills the gap. Tables introduced by later
+# revisions must be created by their migration, not by create_all.
+_BASELINE_TABLES = frozenset(
+    {
+        "box_cache",
+        "feeds",
+        "item_labels",
+        "items",
+        "labels",
+        "pipe_feed_items",
+        "pipes",
+        "runs",
+        "search_cache",
+    }
+)
 
 
 class Base(DeclarativeBase):
@@ -204,23 +227,67 @@ def _legacy_sqlite_tables(engine: Engine, tables: set[str]) -> None:
     if "runs" in tables:
         _legacy_migrate_runs(engine)
 
-    # A very old database may be missing a table entirely. Let create_all add
-    # only the missing ones; existing tables are left untouched.
     from . import models  # noqa: F401  (registers metadata)
 
+    if "labels" not in tables:
+        # This file predates the label table. create_all can build the latest
+        # shape of every missing table, so stamp the whole chain as applied.
+        missing = [
+            table
+            for table in Base.metadata.sorted_tables
+            if table.name not in tables
+        ]
+        if missing:
+            Base.metadata.create_all(engine, tables=missing)
+        _stamp(engine, HEAD_REVISION)
+        return
+
+    # The file already contains the baseline label table, so 0002 must still
+    # run. Only fill in missing baseline tables; later revisions (users) are
+    # created by their own migrations.
     missing = [
         table
         for table in Base.metadata.sorted_tables
-        if table.name not in tables
+        if table.name not in tables and table.name in _BASELINE_TABLES
     ]
     if missing:
         Base.metadata.create_all(engine, tables=missing)
 
-    # A missing labels table was just created with name_key already in place,
-    # so mark that revision as applied. Otherwise the normal baseline plus the
-    # label migration upgrades the file in place.
-    _stamp(engine, BASELINE_REVISION if "labels" in tables else HEAD_REVISION)
+    _stamp(engine, BASELINE_REVISION)
     _upgrade_to_head(engine)
+
+
+def ensure_local_user(db: Session) -> User:
+    """Return the single account-free user used by local installations."""
+
+    from .models import User
+
+    user = db.scalar(select(User).where(User.auth0_sub == LOCAL_AUTH0_SUB))
+    if user is not None:
+        return user
+
+    user = User(
+        auth0_sub=LOCAL_AUTH0_SUB,
+        name="Local",
+        last_seen_at=utcnow(),
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Another process created the anchor first; use the existing row.
+        db.rollback()
+        user = db.scalar(select(User).where(User.auth0_sub == LOCAL_AUTH0_SUB))
+        if user is None:  # pragma: no cover - defensive
+            raise
+    else:
+        db.refresh(user)
+    return user
+
+
+def _ensure_local_anchor(engine: Engine) -> None:
+    with Session(engine) as session:
+        ensure_local_user(session)
 
 
 def init_db(engine: Engine, settings: Settings | None = None) -> None:
@@ -229,6 +296,10 @@ def init_db(engine: Engine, settings: Settings | None = None) -> None:
     When ``MIGRATION_DATABASE_URL`` points somewhere else (the direct Neon host),
     DDL runs on a short-lived engine there while the application keeps its
     pooled connection.
+
+    Local installations also get their internal user here, so the reader can
+    start with an empty database and no sign-in step. Cloud mode never creates
+    the local anchor.
     """
 
     if settings is not None and settings.migration_database_url:
@@ -241,9 +312,14 @@ def init_db(engine: Engine, settings: Settings | None = None) -> None:
                 _init_db(migration_engine)
             finally:
                 migration_engine.dispose()
+            if settings.is_cloud:
+                return
+            _ensure_local_anchor(engine)
             return
 
     _init_db(engine)
+    if settings is None or not settings.is_cloud:
+        _ensure_local_anchor(engine)
 
 
 def _init_db(engine: Engine) -> None:

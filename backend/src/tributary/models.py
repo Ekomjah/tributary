@@ -198,6 +198,33 @@ class Run(Base):
         return f"Run(id={self.id!r}, pipe_id={self.pipe_id!r}, status={self.status!r})"
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    auth0_sub: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime,
+        nullable=False,
+        default=utcnow,
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        UTCDateTime,
+        nullable=False,
+        default=utcnow,
+    )
+
+    def __repr__(self) -> str:
+        return f"User(id={self.id!r}, auth0_sub={self.auth0_sub!r})"
+
+
 class BoxCache(Base):
     __tablename__ = "box_cache"
 

@@ -254,7 +254,7 @@ def fetch(
 
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         factory = create_session_factory(engine)
         with (
             sentry_sdk.start_transaction(name="feed.fetch", op="task"),
@@ -286,7 +286,7 @@ def refresh(
     settings = _load_settings(db)
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         results = feeds.refresh_feeds(create_session_factory(engine), settings)
     except Exception as exc:
         typer.echo(f"Could not refresh feeds: {exc}", err=True)
@@ -346,7 +346,7 @@ def search_web(
 
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
             outcome = web_search.run_search(
@@ -417,7 +417,7 @@ def run_pipe_file(
     settings = _load_settings(db)
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         factory = create_session_factory(engine)
         with (
             sentry_sdk.start_transaction(name="pipe.run", op="task") as transaction,
@@ -469,7 +469,7 @@ def export_training(
     settings = _load_settings(db)
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
             stmt = select(Item).options(selectinload(Item.feed)).order_by(Item.id)
@@ -509,7 +509,7 @@ def doctor(
 
     engine = create_engine(settings)
     try:
-        init_db(engine)
+        init_db(engine, settings)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
             feed_count = session.scalar(select(func.count()).select_from(Feed)) or 0
