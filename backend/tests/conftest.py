@@ -141,3 +141,47 @@ def client(settings: Settings, engine: Engine) -> Iterator[TestClient]:
     app = create_app(settings)
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def postgres_database_url() -> str:
+    """Return the PostgreSQL test URL, skipping cloud tests on SQLite runs."""
+
+    url = os.environ.get("TRIBUTARY_TEST_DATABASE_URL", "")
+    if not url.startswith("postgresql"):
+        pytest.skip("cloud mode requires a PostgreSQL test database")
+    return url
+
+
+@pytest.fixture
+def cloud_settings(postgres_database_url: str) -> Settings:
+    """Settings for a cloud-mode app backed by the PostgreSQL test database."""
+
+    return Settings(
+        _env_file=None,
+        dev_env="test",
+        database_url_override=postgres_database_url,
+        auth0_domain="tenant.example",
+        auth0_audience="https://api.example.test",
+        auth0_client_id="spa-client-id",
+        cors_origins="http://localhost:3000",
+    )
+
+
+@pytest.fixture
+def cloud_client(cloud_settings: Settings) -> Iterator[TestClient]:
+    """Start a cloud-mode app against the isolated PostgreSQL database."""
+
+    from tributary.main import create_app
+
+    reset_engine = create_engine(cloud_settings)
+    _reset_non_sqlite_database(reset_engine)
+    reset_engine.dispose()
+
+    app = create_app(cloud_settings)
+    with TestClient(app) as test_client:
+        yield test_client
+
+    reset_engine = create_engine(cloud_settings)
+    _reset_non_sqlite_database(reset_engine)
+    reset_engine.dispose()

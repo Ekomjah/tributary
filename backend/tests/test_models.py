@@ -14,6 +14,7 @@ from tributary.models import (
     Label,
     Pipe,
     Run,
+    User,
     item_labels,
 )
 
@@ -28,11 +29,38 @@ EXPECTED_TABLES = {
     "pipes",
     "runs",
     "search_cache",
+    "users",
 }
 
 
 def test_all_mvp_tables_are_created(engine) -> None:
     assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
+
+
+def test_user_round_trip(db_session: Session) -> None:
+    user = User(
+        auth0_sub="auth0|round-trip",
+        email="ada@example.com",
+        name="Ada",
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    assert user.id is not None
+    assert user.auth0_sub == "auth0|round-trip"
+    assert user.created_at.tzinfo is not None
+    assert user.last_seen_at.tzinfo is not None
+
+
+def test_user_auth0_sub_is_unique(db_session: Session) -> None:
+    db_session.add(User(auth0_sub="auth0|duplicate"))
+    db_session.commit()
+
+    db_session.add(User(auth0_sub="auth0|duplicate"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
 
 def test_models_round_trip(db_session: Session) -> None:
