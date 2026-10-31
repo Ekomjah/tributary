@@ -13,13 +13,16 @@ uv run tributary serve
 ```
 
 The API is at <http://127.0.0.1:8000>, with interactive docs at
-<http://127.0.0.1:8000/docs>. Copy the repository-level `.env.example` to `.env`
-to override defaults. The CLI is built with Typer; `uv run tributary --help` lists
-every command. Sentry is enabled by default once `SENTRY_DSN` is set; set
-`SENTRY_ENABLED=false` to opt out. Monitoring captures request data, stack
-variables and GenAI prompts/responses by default; each category has a
-`SENTRY_COLLECT_*` switch, and authorization/cookie headers plus known secrets
-are redacted.
+<http://127.0.0.1:8000/docs>. Copy the repository-level `.env.local.example` to
+`.env.local` (or run `make env-local` from the repository root), then use
+`uv run --env-file ../.env.local <command>` to load that profile. The CLI is
+built with Typer; `uv run tributary --help` lists every command. For the hosted
+profile, copy `.env.cloud.example` to `.env.cloud` and fill in PostgreSQL, Auth0
+and `CORS_ORIGINS`; `.env.example` documents every switch for both profiles.
+Sentry is enabled by default once `SENTRY_DSN` is set; set `SENTRY_ENABLED=false`
+to opt out. Monitoring captures request data, stack variables and GenAI
+prompts/responses by default; each category has a `SENTRY_COLLECT_*` switch, and
+authorization/cookie headers plus known secrets are redacted.
 
 SQLite is the default. Set `DATABASE_URL` to a PostgreSQL URL to use Postgres
 instead; Render's `postgres://` form is normalized automatically. `DATABASE=postgres`

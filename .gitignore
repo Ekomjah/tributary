@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
+!.env.cloud.example
 *.db
 *.db-wal
 *.db-shm

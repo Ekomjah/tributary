@@ -26,25 +26,27 @@ Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [
 ```bash
 git clone https://github.com/Ekomjah/tributary
 cd tributary
-cp .env.example .env
-cd backend
-uv sync
-uv run tributary init-db
-uv run tributary fetch https://hnrss.org/frontpage
-uv run tributary serve
+make setup
+make env-local
+make dev
 ```
 
-The API is at <http://127.0.0.1:8000>, with interactive docs at <http://127.0.0.1:8000/docs>.
+`make env-local` copies `.env.local.example` to the ignored `.env.local`; the
+defaults need no edits. `make dev` runs `init-db`, starts the API at
+<http://127.0.0.1:8000> (docs at `/docs`), and starts the reader at
+<http://localhost:3000>.
 
-Run the reader in a second terminal:
+To run the API by itself:
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev
+cd backend
+uv run --env-file ../.env.local tributary init-db
+uv run --env-file ../.env.local tributary fetch https://hnrss.org/frontpage
+uv run --env-file ../.env.local tributary serve
 ```
 
-Open <http://localhost:3000>. The reader talks to the API through `NEXT_PUBLIC_API_BASE`, which defaults to `http://127.0.0.1:8000`.
+The reader reads `NEXT_PUBLIC_API_BASE` from `frontend/.env.local`, not from the
+root profile file. It defaults to `http://127.0.0.1:8000`.
 
 Run a pipe without the browser (from `backend/`):
 
@@ -61,11 +63,11 @@ uv run tributary doctor
 ```
 
 For Ollama Cloud instead, set `OLLAMA_CLOUD=true` and `OLLAMA_API_KEY` in
-`.env`. Cloud mode uses `gemma4:3b` at `https://ollama.com` and does not need a
-local model pull. `OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` override those
-defaults.
+`.env.local`. Cloud mode uses `gemma4:3b` at `https://ollama.com` and does not
+need a local model pull. `OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` override
+those defaults.
 
-Search needs a [SerpAPI](https://serpapi.com) key in `.env`:
+Search needs a [SerpAPI](https://serpapi.com) key in `.env.local`:
 
 ```bash
 uv run tributary search "AI regulation this week"
@@ -116,18 +118,40 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [Filter] -> [Sort] -> [Limit] -> read
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Nothing is required for basic local use.
+The repository ships two explicit templates:
+
+| Template             | Profile                      | Copy with        | Run with            |
+| -------------------- | ---------------------------- | ---------------- | ------------------- |
+| `.env.local.example` | Self-hosted, SQLite, Ollama  | `make env-local` | `make dev-api-local` |
+| `.env.cloud.example` | Hosted, PostgreSQL, Auth0    | `make env-cloud` | `make dev-api-cloud` |
+
+The generated `.env.local` and `.env.cloud` files are git-ignored. Nothing is
+required for basic local use. `.env.example` remains the full reference for
+every switch, including the Sentry categories.
+
+Commands run outside the Makefile can load a profile explicitly:
+
+```bash
+cd backend
+uv run --env-file ../.env.local tributary serve
+```
+
+`uv run --env-file` sets process environment variables, which take precedence
+over the `.env` files the app loads on its own.
 
 ### Local and cloud profiles
 
 `DEV_ENV` chooses the runtime profile:
 
-- **Local** (unset or empty): no accounts, SQLite by default. Set
+- **Local** (unset or empty): no accounts, SQLite by default, local Ollama. Set
   `DATABASE_URL` if you want to run the same account-free build on PostgreSQL.
 - **Cloud** (any non-empty value): PostgreSQL, Auth0 and an explicit
   `CORS_ORIGINS` value are required. Every request will be scoped to the signed-in
   user. Cloud mode is still being finished: tenant isolation and the Auth0
   integration land in later phases, so do not expose this profile publicly yet.
+
+The reader does not use either profile file. Set `NEXT_PUBLIC_API_BASE` in
+`frontend/.env.local`.
 
 ### Ollama modes
 
@@ -301,8 +325,10 @@ The root `Makefile` wraps the common commands:
 
 ```bash
 make setup       # install backend and frontend dependencies
-make dev         # run the API (local SQLite) and reader together
-make dev-api     # API only, local SQLite, at http://127.0.0.1:8000
+make env-local   # create .env.local from the template
+make dev         # run the API (SQLite, .env.local) and reader together
+make dev-api-local    # API only, using .env.local
+make dev-api-cloud    # API only, using .env.cloud (PostgreSQL, Auth0)
 make dev-api-postgres # API against the disposable PostgreSQL database
 make dev-client  # reader only, at http://localhost:3000
 make test-api    # backend tests (SQLite)
