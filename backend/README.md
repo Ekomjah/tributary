@@ -14,24 +14,19 @@ uv run tributary serve
 
 The API is at <http://127.0.0.1:8000>, with interactive docs at
 <http://127.0.0.1:8000/docs>. Copy the repository-level `.env.local.example` to
-`.env.local` (or run `make env-local` from the repository root), then use
-`uv run --env-file ../.env.local <command>` to load that profile. The CLI is
-built with Typer; `uv run tributary --help` lists every command. For the hosted
-profile, copy `.env.cloud.example` to `.env.cloud` and fill in PostgreSQL, Auth0
-and `CORS_ORIGINS`; `.env.example` documents every switch for both profiles.
+`.env.local` when you need overrides, then use
+`uv run --env-file ../.env.local <command>` to load it; the defaults need no
+file. The CLI is built with Typer; `uv run tributary --help` lists every command.
 Sentry is enabled by default once `SENTRY_DSN` is set; set `SENTRY_ENABLED=false`
 to opt out. Monitoring captures request data, stack variables and GenAI
 prompts/responses by default; each category has a `SENTRY_COLLECT_*` switch, and
 authorization/cookie headers plus known secrets are redacted.
 
 SQLite is the default. Set `DATABASE_URL` to a PostgreSQL URL to use Postgres
-instead; Render's `postgres://` form is normalized automatically. `DATABASE=postgres`
-makes a missing URL a startup error. On Neon, keep the pooled URL in
-`DATABASE_URL` and let `DATABASE_URL_UNPOOLED` (written by `neon env pull`) drive
-migrations, or set `MIGRATION_DATABASE_URL` explicitly. Schema changes live in
+instead; `postgres://` and `postgresql://` forms are normalized automatically.
+`DATABASE=postgres` makes a missing URL a startup error. Schema changes live in
 `migrations/` and run through Alembic at startup or with
-`uv run tributary init-db`. Set `DEV_ENV` to a non-empty value only when the
-PostgreSQL, Auth0 and CORS settings for the cloud profile are present.
+`uv run tributary init-db`. Leave `DEV_ENV` empty for the self-hosted build.
 
 The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 
@@ -72,7 +67,7 @@ uv run ruff check .
 
 ```text
 src/tributary/
-  config.py      settings, local/cloud profile and repository paths
+  config.py      settings and repository paths
   db.py          engine, sessions, migrations, UTC timestamp type
   models.py      Feed, Item, Label, Pipe, Run, BoxCache, SearchCache
   schemas.py     Pydantic request/response models

@@ -27,16 +27,16 @@ Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [
 git clone https://github.com/Ekomjah/tributary
 cd tributary
 make setup
-make env-local
+cp .env.local.example .env.local
 make dev
 ```
 
-`make env-local` copies `.env.local.example` to the ignored `.env.local`; the
-defaults need no edits. `make dev` runs `init-db`, starts the API at
+`.env.local` is optional for a basic install: the defaults use SQLite and a
+local Ollama server. `make dev` applies the migrations, starts the API at
 <http://127.0.0.1:8000> (docs at `/docs`), and starts the reader at
 <http://localhost:3000>.
 
-To run the API by itself:
+To run the API by itself with the profile loaded:
 
 ```bash
 cd backend
@@ -118,18 +118,17 @@ feeds -> [Fetch] -> [Merge] -> [Dedupe] -> [Filter] -> [Sort] -> [Limit] -> read
 
 ## Configuration
 
-The repository ships two explicit templates:
+Copy the self-hosted template to `.env.local` and edit it as needed:
 
-| Template             | Profile                      | Copy with        | Run with            |
-| -------------------- | ---------------------------- | ---------------- | ------------------- |
-| `.env.local.example` | Self-hosted, SQLite, Ollama  | `make env-local` | `make dev-api-local` |
-| `.env.cloud.example` | Hosted, PostgreSQL, Auth0    | `make env-cloud` | `make dev-api-cloud` |
+```bash
+cp .env.local.example .env.local
+```
 
-The generated `.env.local` and `.env.cloud` files are git-ignored. Nothing is
-required for basic local use. `.env.example` remains the full reference for
-every switch, including the Sentry categories.
+Nothing is required for basic local use: SQLite and local Ollama are the
+defaults. `.env.example` is the full reference for every switch, including the
+Sentry categories. The generated `.env.local` is git-ignored.
 
-Commands run outside the Makefile can load a profile explicitly:
+Load the file explicitly when you run a command outside the Makefile:
 
 ```bash
 cd backend
@@ -139,18 +138,11 @@ uv run --env-file ../.env.local tributary serve
 `uv run --env-file` sets process environment variables, which take precedence
 over the `.env` files the app loads on its own.
 
-### Local and cloud profiles
+### Self-hosted profile
 
-`DEV_ENV` chooses the runtime profile:
-
-- **Local** (unset or empty): no accounts, SQLite by default, local Ollama. Set
-  `DATABASE_URL` if you want to run the same account-free build on PostgreSQL.
-- **Cloud** (any non-empty value): PostgreSQL, Auth0 and an explicit
-  `CORS_ORIGINS` value are required. Every request will be scoped to the signed-in
-  user. Cloud mode is still being finished: tenant isolation and the Auth0
-  integration land in later phases, so do not expose this profile publicly yet.
-
-The reader does not use either profile file. Set `NEXT_PUBLIC_API_BASE` in
+Leave `DEV_ENV` empty. The build is account-free: no Auth0, no per-user
+libraries. Set `DATABASE_URL` if you want PostgreSQL instead of SQLite. The
+reader does not use `.env.local`; set `NEXT_PUBLIC_API_BASE` in
 `frontend/.env.local`.
 
 ### Ollama modes
@@ -166,11 +158,10 @@ without a key, and `doctor` explains what is missing.
 ### Storage
 
 SQLite remains the default storage. Set `DATABASE_URL` to run the same
-account-free build on PostgreSQL. `postgres://` and `postgresql://` URLs,
-including Neon's pooled `-pooler` host, are normalized to SQLAlchemy's psycopg
-driver. `DATABASE=postgres` is an optional selector that makes a missing
-`DATABASE_URL` fail at startup instead of silently creating a SQLite file on an
-ephemeral disk. Schema changes are applied with Alembic automatically at
+account-free build on PostgreSQL. `postgres://` and `postgresql://` URLs are
+normalized to SQLAlchemy's psycopg driver. `DATABASE=postgres` is an optional
+selector that makes a missing `DATABASE_URL` fail at startup instead of silently
+creating a SQLite file. Schema changes are applied with Alembic automatically at
 startup; `uv run tributary init-db` runs the same migrations by hand.
 
 For local PostgreSQL, the repository ships disposable-container targets that
@@ -183,34 +174,21 @@ make test-api-postgres   # run the full backend suite against it
 make pg-stop             # stop and remove it
 ```
 
-On Neon, use two URLs. `DATABASE_URL` uses the pooled `-pooler` host, and
-`DATABASE_URL_UNPOOLED` uses the direct host. `neon env pull` writes both names;
-the app uses the unpooled URL for migrations automatically, and
-`MIGRATION_DATABASE_URL` is an explicit override. DDL runs on the direct
-connection while the application keeps its pooled connections; both URLs should
-include `sslmode=require`. PostgreSQL pool sizing and idle-connection recovery
-are controlled by `DATABASE_POOL_*` and `DATABASE_CONNECT_TIMEOUT`.
+PostgreSQL pool sizing and idle-connection recovery are controlled by
+`DATABASE_POOL_*` and `DATABASE_CONNECT_TIMEOUT`.
 
 | Variable                         | Purpose                                                          | Default                  |
 | -------------------------------- | ---------------------------------------------------------------- | ------------------------ |
-| `DEV_ENV`                        | Empty for local; any non-empty value enables cloud mode          | empty                    |
+| `DEV_ENV`                        | Leave empty for the self-hosted build                            | empty                    |
 | `TRIBUTARY_DB_PATH`              | SQLite database file, relative to the repo root or absolute      | `tributary.db`           |
 | `DATABASE`                       | Optional selector: `sqlite` or `postgres`; empty infers from URL | empty (SQLite)           |
 | `DATABASE_URL`                   | PostgreSQL or SQLite URL; overrides `TRIBUTARY_DB_PATH`          | unset                    |
-| `DATABASE_URL_UNPOOLED`          | Neon's direct URL, used automatically for migrations              | unset                    |
 | `MIGRATION_DATABASE_URL`         | Explicit override for the DDL/migration URL                      | unset                    |
 | `DATABASE_POOL_SIZE`             | PostgreSQL pool size per process                                 | `5`                      |
 | `DATABASE_MAX_OVERFLOW`          | Extra PostgreSQL connections above the pool size                 | `5`                      |
 | `DATABASE_POOL_TIMEOUT`          | Seconds to wait for a pooled connection                          | `30`                     |
 | `DATABASE_POOL_RECYCLE`          | Seconds before a pooled connection is replaced                   | `300`                    |
 | `DATABASE_CONNECT_TIMEOUT`       | Seconds before a PostgreSQL connect attempt fails                | `10`                     |
-| `CORS_ORIGINS`                   | Browser origins, comma-separated or JSON                         | localhost:3000 locally   |
-| `CORS_ORIGIN_REGEX`              | Optional anchored regex for preview origins                      | unset                    |
-| `AUTH0_DOMAIN`                   | Auth0 tenant hostname                                            | unset                    |
-| `AUTH0_AUDIENCE`                 | Auth0 API audience requested by the SPA                          | unset                    |
-| `AUTH0_CLIENT_ID`                | Auth0 SPA client ID                                              | unset                    |
-| `AUTH0_ALLOWED_SUBS`             | Optional comma-separated subject allowlist for a private beta    | empty (all valid users)  |
-| `AUTH0_ALLOWED_EMAILS`           | Optional verified-email allowlist for a private beta              | empty (all valid users)  |
 | `OLLAMA_CLOUD`                   | Use Ollama Cloud instead of the local Ollama server              | `false`                  |
 | `OLLAMA_API_KEY`                 | Ollama Cloud API key; required when `OLLAMA_CLOUD=true`          | unset                    |
 | `OLLAMA_CLOUD_MODEL`             | Model used in cloud mode                                         | `gemma4:3b`              |
@@ -251,73 +229,31 @@ The rest of the Sentry switches (`SENTRY_SEND_USER_INFO`,
 
 Sentry is opt-in through `SENTRY_DSN`. Without a DSN the app runs without a Sentry client, so no errors, traces, logs, metrics or GenAI spans are sent. With a DSN, feed refreshes record duration, new-item counts and failures as errors and metrics. Search records request, cache-hit and error counts plus latency; API keys and URL query strings are redacted from every event. A pipe run is one trace with a span per box. AI boxes and query refinement emit `gen_ai.chat` spans with the model, token counts and, when `SENTRY_COLLECT_GEN_AI=true`, the prompts and responses. `SENTRY_TRACES_SAMPLE_RATE=0` keeps error reporting on while turning tracing off; `SENTRY_ENABLED=false` turns all of it off.
 
-## Deployment
+## Self-hosting
 
-The self-hosted build stays account-free: SQLite by default, or PostgreSQL when
-`DATABASE_URL` is set. The reader is served by Next.js during development;
-`tributary serve` runs the API. Migrations run automatically on startup.
+The build stays account-free: SQLite by default, or PostgreSQL when
+`DATABASE_URL` is set. `tributary serve` runs the API and applies migrations on
+startup. The reader is a Next.js app:
 
-The hosted profile targets Render for the API and Vercel for the reader. It uses
-PostgreSQL, Auth0 on both sides, and per-user libraries. The database foundation
-is in place (mode switch, PostgreSQL support, Alembic migrations); Auth0
-verification, frontend login, tenant isolation and the Render/Vercel deployment
-files are still in progress. Until those land, keep `DEV_ENV` empty on any
-public deployment.
+```bash
+cd backend
+uv run tributary serve --host 0.0.0.0 --port 8000
 
-### Neon + Render Free
+cd ../frontend
+pnpm build
+pnpm start
+```
 
-Neon provides PostgreSQL; Render runs the API. Render Free has an ephemeral
-filesystem, so all durable state must live in Neon. No persistent disk is
-needed.
-
-The repository includes `neon.ts` and a git-ignored `.neon` link. With the CLI
-signed in, `neon deploy` applies the policy to the linked `production` branch,
-then pulls `DATABASE_URL`, `DATABASE_URL_UNPOOLED` and `NEON_BRANCH` into `.env`.
-
-1. Create a Neon project on the Free plan in the region closest to the Render
-   service, or reuse the linked one. `neon deploy` provisions the branch; the
-   pooled URL is in `DATABASE_URL` and the direct URL is in
-   `DATABASE_URL_UNPOOLED`. Keep `sslmode=require` on both.
-2. Create a Render Web Service from this repository.
-   - Root directory: `backend`
-   - Build command: `pip install uv && uv sync --frozen --no-dev`
-   - Start command: `uv run --no-sync tributary serve --host 0.0.0.0 --port $PORT`
-   - Health check path: `/health`
-3. Set these Render environment variables:
-
-   | Variable                 | Value                                             |
-   | ------------------------ | ------------------------------------------------- |
-   | `DATABASE`               | `postgres`                                        |
-   | `DATABASE_URL`           | Neon pooled (`-pooler`) connection string         |
-   | `DATABASE_URL_UNPOOLED`  | Neon direct connection string used for migrations |
-   | `CORS_ORIGINS`           | The Vercel reader origin, for example `https://app.example.com` |
-   | `SERPAPI_API_KEY`        | Optional; search stays off when empty             |
-   | `OLLAMA_CLOUD`           | `true` with `OLLAMA_API_KEY` to use Ollama Cloud  |
-
-   Leave `DEV_ENV` empty until Auth0 verification and tenant isolation land.
-   With it empty the deployment is account-free and every visitor sees the same
-   library, so do not put private data in it or expose it as a multi-user
-   service yet.
-4. Deploy. The first boot applies the Alembic migrations over
-   `DATABASE_URL_UNPOOLED`; later boots check the revision and are cheap. You
-   can run the same migration by hand from the Render shell with
-   `uv run tributary init-db`.
-5. On Vercel, deploy `frontend` with `NEXT_PUBLIC_API_BASE` set to the Render
-   URL. Add the Vercel origin to `CORS_ORIGINS` on Render.
-
-Render Free spins a service down after 15 minutes without traffic, so the first
-request afterwards takes about a minute. Neon suspends its compute after a few
-idle minutes; `pool_pre_ping` and `pool_recycle` discard stale pooled
-connections and reconnect on demand. A single Render instance opens at most
-`DATABASE_POOL_SIZE + DATABASE_MAX_OVERFLOW` connections, well inside Neon's
-pooled limit.
+Point the reader at the API with `NEXT_PUBLIC_API_BASE` before building. Keep
+`.env.local`, the SQLite database and the reader's `.next` directory off any
+public path.
 
 ## Limitations
 
 - A search form in the reader and read-aloud are not implemented yet. Search works through the API, the CLI, the Search pipe box and the editor's query preview.
 - The reader and API run as separate local processes during development.
-- The self-hosted build is single-user with no accounts. The cloud profile adds
-  Auth0 accounts and per-user libraries; those pieces are still being built.
+- The build is single-user with no accounts. Keep it on your own machine or
+  behind your own access control.
 
 ## Development
 
@@ -325,10 +261,8 @@ The root `Makefile` wraps the common commands:
 
 ```bash
 make setup       # install backend and frontend dependencies
-make env-local   # create .env.local from the template
-make dev         # run the API (SQLite, .env.local) and reader together
-make dev-api-local    # API only, using .env.local
-make dev-api-cloud    # API only, using .env.cloud (PostgreSQL, Auth0)
+make dev         # run the API (local SQLite) and reader together
+make dev-api     # API only, local SQLite, at http://127.0.0.1:8000
 make dev-api-postgres # API against the disposable PostgreSQL database
 make dev-client  # reader only, at http://localhost:3000
 make test-api    # backend tests (SQLite)
