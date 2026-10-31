@@ -38,7 +38,9 @@ def _settings_with_db_path(settings: Settings, db_path: Path | None) -> Settings
     return settings.model_copy(
         update={
             "db_path": db_path.expanduser().resolve(),
+            "database": "",
             "database_url_override": None,
+            "migration_database_url": None,
         }
     )
 
@@ -129,7 +131,16 @@ def serve(
 
     if db is not None:
         os.environ["TRIBUTARY_DB_PATH"] = str(settings.db_path)
-        os.environ.pop("DATABASE_URL", None)
+        for key in (
+            "DATABASE",
+            "TRIBUTARY_DATABASE",
+            "DATABASE_URL",
+            "TRIBUTARY_DATABASE_URL",
+            "DATABASE_URL_UNPOOLED",
+            "MIGRATION_DATABASE_URL",
+            "TRIBUTARY_MIGRATION_DATABASE_URL",
+        ):
+            os.environ.pop(key, None)
 
     if reload:
         uvicorn.run(

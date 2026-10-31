@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
-from tributary.cli import app
+from tributary.cli import _settings_with_db_path, app
 from tributary.config import ConfigurationError, Settings
 from tributary.db import create_engine, create_session_factory, init_db, session_scope
 from tributary.models import Feed, Item
@@ -57,6 +57,25 @@ def test_init_db_creates_the_database(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Initialized database" in result.output
     assert db_path.exists()
+
+
+def test_db_option_forces_sqlite_over_postgres_environment(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        database="postgres",
+        database_url_override=(
+            "postgresql://user:pass@ep-example-pooler.eu-central-1.aws.neon.tech/tributary"
+        ),
+        migration_database_url=(
+            "postgresql://user:pass@ep-example.eu-central-1.aws.neon.tech/tributary"
+        ),
+    )
+
+    forced = _settings_with_db_path(settings, tmp_path / "cli.db")
+
+    assert forced.database_backend == "sqlite"
+    assert forced.database_url.startswith("sqlite:///")
+    assert forced.migration_database_url is None
 
 
 def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:

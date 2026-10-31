@@ -24,11 +24,11 @@ are redacted.
 SQLite is the default. Set `DATABASE_URL` to a PostgreSQL URL to use Postgres
 instead; Render's `postgres://` form is normalized automatically. `DATABASE=postgres`
 makes a missing URL a startup error. On Neon, keep the pooled URL in
-`DATABASE_URL` and the direct host in `MIGRATION_DATABASE_URL` so migrations run
-outside PgBouncer. Schema changes live in `migrations/` and run through Alembic
-at startup or with `uv run tributary init-db`. Set `DEV_ENV` to a non-empty value
-only when the PostgreSQL, Auth0 and CORS settings for the cloud profile are
-present.
+`DATABASE_URL` and let `DATABASE_URL_UNPOOLED` (written by `neon env pull`) drive
+migrations, or set `MIGRATION_DATABASE_URL` explicitly. Schema changes live in
+`migrations/` and run through Alembic at startup or with
+`uv run tributary init-db`. Set `DEV_ENV` to a non-empty value only when the
+PostgreSQL, Auth0 and CORS settings for the cloud profile are present.
 
 The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 

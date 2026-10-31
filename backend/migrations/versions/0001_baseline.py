@@ -101,7 +101,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column(
             "name",
-            sa.String(length=100, collation="NOCASE"),
+            sa.String(length=100),
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name="pk_labels"),
