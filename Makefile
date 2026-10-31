@@ -10,10 +10,9 @@ PG_CONTAINER := tributary-pg-test
 PG_PORT := 55432
 PG_URL := postgresql+psycopg://tributary:tributary@127.0.0.1:$(PG_PORT)/tributary_test
 
-.PHONY: help setup setup-api setup-client env-local env-cloud \
-	db-init db-migrate db-revision \
+.PHONY: help setup setup-api setup-client db-init db-migrate db-revision \
 	pg-start pg-stop db-init-postgres \
-	dev dev-api dev-api-local dev-api-cloud dev-api-postgres dev-client \
+	dev dev-api dev-api-postgres dev-client \
 	test-api test-api-postgres lint-api format-api check-api \
 	lint-client typecheck-client test-client build-client check-client \
 	ci clean
@@ -29,14 +28,6 @@ setup-api: ## Install backend dependencies with uv
 
 setup-client: ## Install frontend dependencies with pnpm
 	cd $(FRONTEND_DIR) && pnpm install
-
-env-local: ## Create .env.local from the local/self-hosted template
-	@test -f .env.local || cp .env.local.example .env.local
-	@echo ".env.local is ready; edit it if you need SerpAPI or Sentry."
-
-env-cloud: ## Create .env.cloud from the cloud template
-	@test -f .env.cloud || cp .env.cloud.example .env.cloud
-	@echo ".env.cloud is ready; fill in the database, Auth0 and CORS values."
 
 db-init: ## Create the local SQLite database and apply migrations
 	cd $(BACKEND_DIR) && uv run tributary init-db --db "$(DB_PATH)"
@@ -71,18 +62,10 @@ db-init-postgres: ## Apply migrations to the disposable PostgreSQL database
 		uv run tributary init-db
 
 dev: ## Run the API and the reader together
-	@$(MAKE) --no-print-directory -j2 dev-api-local dev-client
+	@$(MAKE) --no-print-directory -j2 dev-api dev-client
 
 dev-api: db-init ## Run the API against local SQLite at http://127.0.0.1:8000
 	cd $(BACKEND_DIR) && uv run tributary serve --db "$(DB_PATH)"
-
-dev-api-local: env-local ## Run the API with .env.local (SQLite, local Ollama)
-	cd $(BACKEND_DIR) && uv run --env-file ../.env.local tributary init-db && \
-		uv run --env-file ../.env.local tributary serve
-
-dev-api-cloud: env-cloud ## Run the API with .env.cloud (PostgreSQL, Auth0, Ollama Cloud)
-	cd $(BACKEND_DIR) && uv run --env-file ../.env.cloud tributary init-db && \
-		uv run --env-file ../.env.cloud tributary serve
 
 dev-api-postgres: db-init-postgres ## Run the API against the disposable PostgreSQL database
 	cd $(BACKEND_DIR) && DATABASE=postgres DATABASE_URL="$(PG_URL)" \
