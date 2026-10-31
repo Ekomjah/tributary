@@ -3,7 +3,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
-export default function Providers({ children }: { children: ReactNode }) {
+import { AuthProvider } from "@/lib/auth";
+import type { AuthRuntimeConfig } from "@/lib/auth-config";
+
+export default function Providers({
+  auth,
+  children,
+}: {
+  auth: AuthRuntimeConfig;
+  children: ReactNode;
+}) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -18,6 +27,8 @@ export default function Providers({ children }: { children: ReactNode }) {
   );
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider config={auth}>{children}</AuthProvider>
+    </QueryClientProvider>
   );
 }

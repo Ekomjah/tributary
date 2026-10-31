@@ -39,6 +39,7 @@ class FetchBox:
             result = feeds.fetch_feed(
                 context.session,
                 url,
+                owner_id=context.owner_id,
                 client=context.client,
                 min_full_chars=context.settings.article_min_chars,
             )

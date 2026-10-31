@@ -6,7 +6,8 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tributary.models import Feed, Item, Label
+from tributary.db import ensure_local_user
+from tributary.models import Feed, Item, Label, Pipe, Run, User
 from tributary.services import articles, feeds
 
 RSS = """<?xml version="1.0" encoding="utf-8"?>
@@ -43,7 +44,7 @@ def seed_feed(
     url: str = "https://example.com/feed.xml",
     title: str = "Example",
 ) -> Feed:
-    feed = Feed(url=url, title=title)
+    feed = Feed(owner_id=ensure_local_user(db).id, url=url, title=title)
     db.add(feed)
     db.commit()
     db.refresh(feed)
@@ -279,7 +280,7 @@ def test_refresh_all_isolates_a_dead_feed(
 
 def test_item_filters_pagination_and_updates(client: TestClient, db_session: Session) -> None:
     feed = seed_feed(db_session)
-    python = Label(name="python")
+    python = Label(owner_id=ensure_local_user(db_session).id, name="python")
     db_session.add(python)
     db_session.commit()
     db_session.refresh(python)
@@ -524,3 +525,173 @@ def test_failed_run_is_recorded(client: TestClient, monkeypatch) -> None:
     assert len(runs) == 1
     assert runs[0]["status"] == "error"
     assert "HTTPStatusError" in runs[0]["error"]
+
+
+def test_cross_tenant_rows_are_invisible_and_immutable(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    local = ensure_local_user(db_session)
+    other = User(
+        auth0_sub="auth0|other",
+        name="Other",
+        last_seen_at=datetime(2026, 10, 31, tzinfo=timezone.utc),
+    )
+    db_session.add(other)
+    db_session.flush()
+
+    other_feed = Feed(
+        owner_id=other.id,
+        url="https://other.example/feed.xml",
+        title="Other feed",
+    )
+    other_label = Label(owner_id=other.id, name="Secret")
+    other_pipe = Pipe(
+        owner_id=other.id,
+        name="Other pipe",
+        spec_json={"steps": []},
+    )
+    db_session.add_all([other_feed, other_label, other_pipe])
+    db_session.flush()
+
+    other_item = Item(
+        feed_id=other_feed.id,
+        guid="other-item",
+        title="Other item",
+        content="Private",
+        fetched_at=datetime(2026, 10, 31, tzinfo=timezone.utc),
+    )
+    db_session.add(other_item)
+    db_session.flush()
+    other_item.labels.append(other_label)
+    other_run = Run(
+        pipe_id=other_pipe.id,
+        status="success",
+        result_count=1,
+        item_ids_json=[other_item.id],
+        steps_json=[],
+    )
+    db_session.add(other_run)
+    db_session.commit()
+
+    assert client.get("/api/feeds").json() == []
+    assert client.get("/api/labels").json() == []
+    assert client.get("/api/pipes").json() == []
+    assert client.get("/api/items").json()["total"] == 0
+    assert client.get(f"/api/items?feed_id={other_feed.id}").status_code == 404
+    assert client.get("/api/runs").json() == []
+
+    assert client.get(f"/api/feeds/{other_feed.id}").status_code == 404
+    assert client.delete(f"/api/feeds/{other_feed.id}").status_code == 404
+    assert client.post(f"/api/feeds/{other_feed.id}/refresh").status_code == 404
+    assert client.post("/api/feeds/pipe", json={"pipe_id": other_pipe.id}).status_code == 404
+
+    assert client.get(f"/api/items/{other_item.id}").status_code == 404
+    assert client.patch(
+        f"/api/items/{other_item.id}",
+        json={"is_read": True},
+    ).status_code == 404
+    assert client.post(f"/api/items/{other_item.id}/fetch").status_code == 404
+    assert client.post(
+        f"/api/items/{other_item.id}/labels/{other_label.id}"
+    ).status_code == 404
+    assert client.delete(
+        f"/api/items/{other_item.id}/labels/{other_label.id}"
+    ).status_code == 404
+    assert client.delete(f"/api/labels/{other_label.id}").status_code == 404
+
+    created_label = client.post("/api/labels", json={"name": "secret"})
+    assert created_label.status_code == 201
+    assert created_label.json()["id"] != other_label.id
+
+    assert client.get(f"/api/pipes/{other_pipe.id}").status_code == 404
+    assert client.patch(
+        f"/api/pipes/{other_pipe.id}",
+        json={"name": "Mine"},
+    ).status_code == 404
+    assert client.delete(f"/api/pipes/{other_pipe.id}").status_code == 404
+    assert client.post(f"/api/pipes/{other_pipe.id}/run").status_code == 404
+    assert client.post(f"/api/pipes/{other_pipe.id}/runs").status_code == 404
+    assert client.get(f"/api/runs?pipe_id={other_pipe.id}").status_code == 404
+    assert client.get(f"/api/runs/{other_run.id}").status_code == 404
+    assert client.get(f"/api/runs/{other_run.id}/results").status_code == 404
+
+    own_feed = Feed(
+        owner_id=local.id,
+        url="https://mine.example/feed.xml",
+        title="Mine",
+    )
+    own_pipe = Pipe(owner_id=local.id, name="Mine", spec_json={"steps": []})
+    db_session.add_all([own_feed, own_pipe])
+    db_session.flush()
+    own_item = Item(
+        feed_id=own_feed.id,
+        guid="own-item",
+        title="Mine",
+        content="Mine",
+        fetched_at=datetime(2026, 10, 31, tzinfo=timezone.utc),
+    )
+    db_session.add(own_item)
+    db_session.flush()
+    own_run = Run(
+        pipe_id=own_pipe.id,
+        status="success",
+        result_count=2,
+        item_ids_json=[other_item.id, own_item.id],
+        steps_json=[],
+    )
+    db_session.add(own_run)
+    db_session.commit()
+
+    results = client.get(f"/api/runs/{own_run.id}/results")
+    assert results.status_code == 200
+    assert [item["id"] for item in results.json()["items"]] == [own_item.id]
+
+
+def test_refresh_all_only_touches_the_current_tenant(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    local = ensure_local_user(db_session)
+    other = User(
+        auth0_sub="auth0|other",
+        name="Other",
+        last_seen_at=datetime(2026, 10, 31, tzinfo=timezone.utc),
+    )
+    db_session.add(other)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Feed(
+                owner_id=local.id,
+                url="https://mine.example/feed.xml",
+                title="Mine",
+            ),
+            Feed(
+                owner_id=other.id,
+                url="https://other.example/feed.xml",
+                title="Other",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    called: list[tuple[str, int]] = []
+
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
+        called.append((url, owner_id))
+        return feeds.FetchResult(
+            url=url,
+            feed_id=1,
+            title="Mine",
+            new_items=0,
+            total_entries=0,
+        )
+
+    monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
+
+    response = client.post("/api/feeds/refresh")
+
+    assert response.status_code == 200
+    assert called == [("https://mine.example/feed.xml", local.id)]

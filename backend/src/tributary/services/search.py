@@ -168,6 +168,7 @@ def run_search(
     settings: Settings,
     params: SearchParams,
     *,
+    owner_id: int,
     backend: SearchBackend | None = None,
     persist: bool = True,
     raw_query: str | None = None,
@@ -195,7 +196,7 @@ def run_search(
         _metric_distribution("search.results", len(results), {"engine": params.engine})
 
     if persist:
-        items = _persist(session, params, results, raw_query=raw_query)
+        items = _persist(session, params, results, owner_id=owner_id, raw_query=raw_query)
     else:
         items = [
             ItemOut(
@@ -337,14 +338,17 @@ def _persist(
     params: SearchParams,
     results: list[dict[str, Any]],
     *,
+    owner_id: int,
     raw_query: str | None,
 ) -> list[ItemOut]:
     url = f"search://{params.cache_key}"
-    feed = session.scalar(select(Feed).where(Feed.url == url))
+    feed = session.scalar(
+        select(Feed).where(Feed.owner_id == owner_id, Feed.url == url)
+    )
     title = f"Search: {raw_query or params.q}"[:500]
 
     if feed is None:
-        feed = Feed(url=url, title=title, kind="search")
+        feed = Feed(owner_id=owner_id, url=url, title=title, kind="search")
         session.add(feed)
         session.flush()
     else:

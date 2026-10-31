@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from tributary.config import Settings
+from tributary.db import ensure_local_user
 from tributary.models import Feed, Item
 from tributary.services import articles
 
@@ -19,7 +20,11 @@ def make_item(
     link: str | None = "https://example.com/post",
     title: str = "Post",
 ) -> Item:
-    feed = Feed(url="https://example.com/feed.xml", title="Example")
+    feed = Feed(
+        owner_id=ensure_local_user(session).id,
+        url="https://example.com/feed.xml",
+        title="Example",
+    )
     session.add(feed)
     session.flush()
     item = Item(

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from tributary.boxes.ai import MeaningFilterBox, SummarizeBox, WhyCareBox
 from tributary.boxes.base import RunContext
 from tributary.config import Settings
+from tributary.db import ensure_local_user
 from tributary.models import Feed, Item
 from tributary.schemas import ItemOut
 from tributary.services import model as model_service
@@ -52,7 +53,11 @@ def seed_item(
     decision: str | None = None,
     guid: str | None = None,
 ) -> Item:
-    feed = Feed(url=f"https://example.com/{guid or title}.xml", title="Example")
+    feed = Feed(
+        owner_id=ensure_local_user(session).id,
+        url=f"https://example.com/{guid or title}.xml",
+        title="Example",
+    )
     session.add(feed)
     session.flush()
     item = Item(
@@ -75,6 +80,7 @@ def context_for(session: Session, settings: Settings, model: FakeModel) -> RunCo
         session=session,
         settings=settings,
         client=None,  # type: ignore[arg-type]
+        owner_id=ensure_local_user(session).id,
         model=model,
     )
 

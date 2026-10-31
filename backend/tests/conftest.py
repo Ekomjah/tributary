@@ -130,6 +130,18 @@ def db_session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 
 @pytest.fixture
+def local_user(session_factory: sessionmaker[Session]) -> models.User:
+    """Return the single account-free owner used by local installations."""
+
+    from tributary.db import ensure_local_user
+
+    with session_factory() as session:
+        user = ensure_local_user(session)
+        session.expunge(user)
+    return user
+
+
+@pytest.fixture
 def client(settings: Settings, engine: Engine) -> Iterator[TestClient]:
     """Start the app against an isolated schema.
 

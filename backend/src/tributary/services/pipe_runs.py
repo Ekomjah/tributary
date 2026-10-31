@@ -87,7 +87,12 @@ def execute_run(
         spec = PipeSpec.model_validate(pipe.spec_json)
         result = run_pipe(
             spec,
-            RunContext(session=session, settings=settings, client=active_client),
+            RunContext(
+                session=session,
+                settings=settings,
+                client=active_client,
+                owner_id=pipe.owner_id,
+            ),
         )
         run = session.get(Run, run_id)
         if run is None:

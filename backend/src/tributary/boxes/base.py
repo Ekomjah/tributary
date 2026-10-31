@@ -23,6 +23,7 @@ class RunContext:
     session: Session
     settings: Settings
     client: httpx.Client
+    owner_id: int
     sources: list[list[ItemOut]] = field(default_factory=list)
     model: ModelClient | None = None
     refiner: SearchRefiner | None = None

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..schemas import SearchOut, SearchRequest
 from ..services import search
-from .deps import AppSettings, DbSession
+from .deps import AppSettings, CurrentUser, DbSession
 
 router = APIRouter(tags=["search"])
 
@@ -12,6 +12,7 @@ router = APIRouter(tags=["search"])
 @router.post("/search", response_model=SearchOut)
 def run_web_search(
     payload: SearchRequest,
+    user: CurrentUser,
     db: DbSession,
     settings: AppSettings,
 ) -> SearchOut:
@@ -31,6 +32,7 @@ def run_web_search(
             db,
             settings,
             params,
+            owner_id=user.id,
             raw_query=payload.query,
         )
     except search.SearchError as exc:

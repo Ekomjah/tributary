@@ -65,6 +65,7 @@ class SearchBox:
                 context.session,
                 context.settings,
                 params,
+                owner_id=context.owner_id,
                 raw_query=self.query,
             )
         except search.SearchError as exc:

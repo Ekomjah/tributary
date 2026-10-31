@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { BookOpen, Workflow } from "lucide-react";
 
+import AccountMenu from "@/components/account-menu";
+
 export default function PipesShell({
   children,
 }: {
@@ -32,6 +34,7 @@ export default function PipesShell({
           <BookOpen className="size-3.5" aria-hidden="true" />
           Reader
         </Link>
+        <AccountMenu />
       </header>
       <div className="min-h-0 flex-1">{children}</div>
     </div>

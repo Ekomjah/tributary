@@ -228,6 +228,7 @@ def fetch_feed(
     session: Session,
     url: str,
     *,
+    owner_id: int,
     client: httpx.Client,
     min_full_chars: int = 500,
 ) -> FetchResult:
@@ -248,6 +249,7 @@ def fetch_feed(
         result = _fetch_feed(
             session,
             canonical_url,
+            owner_id=owner_id,
             client=client,
             min_full_chars=min_full_chars,
         )
@@ -267,10 +269,13 @@ def _fetch_feed(
     session: Session,
     url: str,
     *,
+    owner_id: int,
     client: httpx.Client,
     min_full_chars: int = 500,
 ) -> FetchResult:
-    feed = session.scalar(select(Feed).where(Feed.url == url))
+    feed = session.scalar(
+        select(Feed).where(Feed.owner_id == owner_id, Feed.url == url)
+    )
 
     headers: dict[str, str] = {}
     if feed is not None:
@@ -307,7 +312,7 @@ def _fetch_feed(
         return _record_error(feed, url, exc)
 
     if feed is None:
-        feed = Feed(url=url, title="")
+        feed = Feed(owner_id=owner_id, url=url, title="")
         session.add(feed)
         session.flush()
 
@@ -324,6 +329,7 @@ def add_feed(
     session: Session,
     url: str,
     *,
+    owner_id: int,
     client: httpx.Client,
     title: str | None = None,
     min_full_chars: int = 500,
@@ -342,7 +348,7 @@ def add_feed(
 
     parsed = parse_feed(download.content)
 
-    feed = Feed(url=canonical_url, title="")
+    feed = Feed(owner_id=owner_id, url=canonical_url, title="")
     session.add(feed)
     session.flush()
 
@@ -459,16 +465,19 @@ def refresh_feeds(
     session_factory: sessionmaker[Session],
     settings: Settings,
     *,
+    owner_id: int,
     client: httpx.Client | None = None,
 ) -> list[FetchResult]:
-    """Refresh every subscribed feed, isolating failures per feed."""
+    """Refresh every feed owned by one user, isolating failures per feed."""
 
     with session_factory() as session:
-        urls = list(
-            session.scalars(select(Feed.url).where(Feed.kind == "feed").order_by(Feed.id)).all()
-        )
+        rows = session.execute(
+            select(Feed.id, Feed.url)
+            .where(Feed.kind == "feed", Feed.owner_id == owner_id)
+            .order_by(Feed.id)
+        ).all()
 
-    if not urls:
+    if not rows:
         return []
 
     owns_client = client is None
@@ -478,13 +487,14 @@ def refresh_feeds(
 
     try:
         with sentry_sdk.start_transaction(name="feed.refresh", op="task"):
-            for url in urls:
+            for feed_id, url in rows:
                 try:
                     with session_scope(session_factory) as session:
                         results.append(
                             fetch_feed(
                                 session,
                                 url,
+                                owner_id=owner_id,
                                 client=active_client,
                                 min_full_chars=settings.article_min_chars,
                             )
@@ -497,7 +507,7 @@ def refresh_feeds(
                         error,
                     )
                     results.append(FetchResult(url=url, error=error))
-                    _mark_feed_error(session_factory, url, exc)
+                    _mark_feed_error(session_factory, feed_id, exc)
     finally:
         if owns_client:
             active_client.close()
@@ -548,19 +558,19 @@ def _record_error(feed: Feed | None, url: str, exc: Exception) -> FetchResult:
 
 def _mark_feed_error(
     session_factory: sessionmaker[Session],
-    url: str,
+    feed_id: int,
     exc: Exception,
 ) -> None:
     try:
         with session_scope(session_factory) as session:
-            feed = session.scalar(select(Feed).where(Feed.url == url))
+            feed = session.get(Feed, feed_id)
             if feed is not None:
                 feed.last_error = _format_error(exc)
                 feed.last_fetched = utcnow()
     except Exception:
         logger.error(
-            "Could not record the fetch error for %s: %s",
-            redact_url(url),
+            "Could not record the fetch error for feed %s: %s",
+            feed_id,
             _format_error(exc),
         )
 

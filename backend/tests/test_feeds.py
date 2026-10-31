@@ -9,7 +9,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tributary.config import Settings
-from tributary.models import Feed, Item
+from tributary.db import ensure_local_user
+from tributary.models import Feed, Item, User
 from tributary.services import feeds
 from tributary.services.feeds import (
     fetch_feed,
@@ -65,6 +66,12 @@ JSON_FEED = f"""{{
 }}"""
 
 
+def owned_fetch(session: Session, url: str, **kwargs):
+    """Fetch as the account-free local user; ownership is tested elsewhere."""
+
+    return fetch_feed(session, url, owner_id=ensure_local_user(session).id, **kwargs)
+
+
 def mock_client(handler) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
 
@@ -93,7 +100,7 @@ def test_fetch_feed_stores_feed_and_items(settings: Settings, db_session: Sessio
         )
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://Example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://Example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok
@@ -123,9 +130,9 @@ def test_fetch_feed_does_not_duplicate_items(settings: Settings, db_session: Ses
         return httpx.Response(200, content=RSS.encode())
 
     with mock_client(handler) as client:
-        first = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        first = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        second = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        second = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert first.new_items == 2
@@ -149,9 +156,9 @@ def test_fetch_feed_sends_conditional_headers_and_handles_304(
         return httpx.Response(304, headers={"ETag": '"v2"'})
 
     with mock_client(handler) as client:
-        first = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        first = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        second = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        second = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert first.new_items == 2
@@ -182,7 +189,7 @@ def test_feed_html_is_cleaned_before_storage(settings: Settings, db_session: Ses
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/clean.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/clean.xml", client=client)
         db_session.commit()
 
     assert result.new_items == 1
@@ -216,7 +223,7 @@ def test_feed_stores_sanitized_content_html(
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/html.xml", client=client)
+        owned_fetch(db_session, "https://example.com/html.xml", client=client)
         db_session.commit()
 
     item = db_session.scalar(select(Item))
@@ -255,7 +262,7 @@ def test_feed_uses_entry_images_when_content_has_none(
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/images.xml", client=client)
+        owned_fetch(db_session, "https://example.com/images.xml", client=client)
         db_session.commit()
 
     items = list(db_session.scalars(select(Item).order_by(Item.id)).all())
@@ -293,7 +300,7 @@ def test_fetch_json_feed_uses_item_image_as_lead_image(
         )
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/image.json", client=client)
+        owned_fetch(db_session, "https://example.com/image.json", client=client)
         db_session.commit()
 
     item = db_session.scalar(select(Item))
@@ -321,7 +328,7 @@ def test_feed_stores_lead_image_and_writer_as_frontmatter(
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/frontmatter.xml", client=client)
+        owned_fetch(db_session, "https://example.com/frontmatter.xml", client=client)
         db_session.commit()
 
     item = db_session.scalar(select(Item))
@@ -333,8 +340,14 @@ def test_feed_stores_lead_image_and_writer_as_frontmatter(
     assert item.content_html == "<p>The article body.</p>"
 
 
-def test_fetch_feed_records_http_errors(settings: Settings, db_session: Session) -> None:
-    feed = Feed(url="https://example.com/missing.xml", title="Missing")
+def test_fetch_feed_records_http_errors(
+    settings: Settings, db_session: Session, local_user: User
+) -> None:
+    feed = Feed(
+        owner_id=local_user.id,
+        url="https://example.com/missing.xml",
+        title="Missing",
+    )
     db_session.add(feed)
     db_session.commit()
 
@@ -342,7 +355,7 @@ def test_fetch_feed_records_http_errors(settings: Settings, db_session: Session)
         return httpx.Response(404, text="not found")
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/missing.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/missing.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -359,7 +372,7 @@ def test_invalid_first_fetch_creates_no_feed_row(settings: Settings, db_session:
         return httpx.Response(404, text="not found")
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/missing.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/missing.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -372,7 +385,7 @@ def test_fetch_feed_records_unparseable_feeds(settings: Settings, db_session: Se
         return httpx.Response(200, content=b"this is not a feed")
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/broken.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/broken.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -382,13 +395,15 @@ def test_fetch_feed_records_unparseable_feeds(settings: Settings, db_session: Se
 
 
 def test_refresh_continues_after_a_dead_feed(
-    settings: Settings, session_factory: sessionmaker[Session]
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    local_user: User,
 ) -> None:
     with session_factory() as session:
         session.add_all(
             [
-                Feed(url="https://example.com/good.xml", title="Good"),
-                Feed(url="https://example.com/bad.xml", title="Bad"),
+                Feed(owner_id=local_user.id, url="https://example.com/good.xml", title="Good"),
+                Feed(owner_id=local_user.id, url="https://example.com/bad.xml", title="Bad"),
             ]
         )
         session.commit()
@@ -399,7 +414,9 @@ def test_refresh_continues_after_a_dead_feed(
         return httpx.Response(200, content=RSS.encode())
 
     with mock_client(handler) as client:
-        results = refresh_feeds(session_factory, settings, client=client)
+        results = refresh_feeds(
+            session_factory, settings, owner_id=local_user.id, client=client
+        )
 
     assert len(results) == 2
     good = next(result for result in results if result.url.endswith("good.xml"))
@@ -417,9 +434,11 @@ def test_refresh_continues_after_a_dead_feed(
 
 
 def test_refresh_without_feeds_returns_an_empty_list(
-    settings: Settings, session_factory: sessionmaker[Session]
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    local_user: User,
 ) -> None:
-    assert refresh_feeds(session_factory, settings) == []
+    assert refresh_feeds(session_factory, settings, owner_id=local_user.id) == []
 
 
 EMPTY_RSS = (
@@ -470,7 +489,7 @@ def test_fetch_rejects_empty_or_non_ready_responses(
         return httpx.Response(status_code, content=body)
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -486,7 +505,7 @@ def test_fetch_rejects_html_without_a_feed(settings: Settings, db_session: Sessi
         return httpx.Response(200, content=body)
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/blog", client=client)
+        result = owned_fetch(db_session, "https://example.com/blog", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -502,7 +521,7 @@ def test_fetch_accepts_a_valid_feed_with_zero_entries(
         return httpx.Response(200, content=EMPTY_RSS.encode())
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/empty.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/empty.xml", client=client)
         db_session.commit()
 
     assert result.ok is True
@@ -516,9 +535,10 @@ def test_fetch_accepts_a_valid_feed_with_zero_entries(
 
 
 def test_invalid_response_keeps_existing_feed_metadata(
-    settings: Settings, db_session: Session
+    settings: Settings, db_session: Session, local_user: User
 ) -> None:
     feed = Feed(
+        owner_id=local_user.id,
         url="https://example.com/feed.xml",
         title="Old title",
         etag='"v1"',
@@ -531,7 +551,7 @@ def test_invalid_response_keeps_existing_feed_metadata(
         return httpx.Response(200, content=b"<html><body>Not a feed</body></html>")
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -548,7 +568,7 @@ def test_fetch_feed_sets_content_full_only_for_content_encoded(
         return httpx.Response(200, content=CONTENT_RSS.encode())
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/content.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/content.xml", client=client)
         db_session.commit()
 
     assert result.new_items == 1
@@ -578,7 +598,7 @@ def test_fetch_json_feed_stores_items(settings: Settings, db_session: Session) -
         )
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.json", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.json", client=client)
         db_session.commit()
 
     assert result.ok is True
@@ -629,7 +649,7 @@ def test_feed_span_uses_only_the_host(
         return httpx.Response(200, content=RSS.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/feed.xml?token=secret", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml?token=secret", client=client)
 
     assert names == ["example.com"]
 
@@ -657,7 +677,7 @@ def test_fetch_feed_normalizes_entities_in_titles_and_summary(
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/entities.xml", client=client)
+        owned_fetch(db_session, "https://example.com/entities.xml", client=client)
         db_session.commit()
 
     feed = db_session.scalar(select(Feed))
@@ -683,7 +703,7 @@ def test_feed_and_item_titles_strip_markup(
         return httpx.Response(200, content=rss.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/markup.xml", client=client)
+        owned_fetch(db_session, "https://example.com/markup.xml", client=client)
         db_session.commit()
 
     feed = db_session.scalar(select(Feed))
@@ -713,11 +733,11 @@ def test_fetch_preserves_validators_when_response_omits_them(
         return httpx.Response(200, content=RSS.encode())
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     feed = db_session.scalar(select(Feed))
@@ -740,9 +760,9 @@ def test_fetch_updates_validators_when_response_provides_new_ones(
         return httpx.Response(200, content=RSS.encode(), headers={"ETag": '"v2"'})
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     feed = db_session.scalar(select(Feed))
@@ -770,9 +790,9 @@ def test_fetch_preserves_validators_on_304_without_headers(
         return httpx.Response(304)
 
     with mock_client(handler) as client:
-        fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.not_modified is True
@@ -791,7 +811,7 @@ def test_relative_entry_links_use_the_final_redirect_url(
         return httpx.Response(200, content=RSS_RELATIVE.encode())
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/old/feed", client=client)
+        result = owned_fetch(db_session, "https://example.com/old/feed", client=client)
         db_session.commit()
 
     assert result.ok is True
@@ -812,7 +832,7 @@ def test_fetch_refuses_a_redirect_to_a_private_address(
         return httpx.Response(200, content=RSS.encode())
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -831,7 +851,7 @@ def test_fetch_refuses_a_redirect_with_credentials(settings: Settings, db_sessio
         )
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok is False
@@ -844,7 +864,7 @@ def test_fetch_rejects_url_credentials(settings: Settings, db_session: Session) 
         raise AssertionError("a URL with credentials must not be requested")
 
     with mock_client(handler) as client:
-        result = fetch_feed(
+        result = owned_fetch(
             db_session,
             "https://user:pass@example.com/feed.xml",
             client=client,
@@ -860,7 +880,7 @@ def test_fetch_stops_after_too_many_redirects(settings: Settings, db_session: Se
         return httpx.Response(302, headers={"Location": "/loop"})
 
     with mock_client(handler) as client:
-        result = fetch_feed(db_session, "https://example.com/feed.xml", client=client)
+        result = owned_fetch(db_session, "https://example.com/feed.xml", client=client)
         db_session.commit()
 
     assert result.ok is False

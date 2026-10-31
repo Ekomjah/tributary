@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tributary.boxes import plain
+from tributary.db import ensure_local_user
 from tributary.models import Pipe, Run
 from tributary.services import feeds, pipe_runs
 
@@ -172,6 +173,7 @@ def test_reap_interrupted_runs_marks_running_rows_failed(
     db_session: Session,
 ) -> None:
     pipe = Pipe(
+        owner_id=ensure_local_user(db_session).id,
         name="Interrupted",
         spec_json={"name": "Interrupted", "steps": [{"box": "limit", "count": 1}]},
     )
@@ -201,6 +203,7 @@ def test_app_startup_reaps_runs_left_by_a_previous_process(
     from tributary.main import create_app
 
     pipe = Pipe(
+        owner_id=ensure_local_user(db_session).id,
         name="Restarted",
         spec_json={"name": "Restarted", "steps": [{"box": "limit", "count": 1}]},
     )

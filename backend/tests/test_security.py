@@ -505,8 +505,7 @@ def test_cloud_me_creates_the_user_once(
 def test_cloud_never_falls_back_to_the_local_anchor(cloud_client: TestClient) -> None:
     engine = cloud_client.app.state.engine
     with Session(engine) as session:
-        session.add(User(auth0_sub=LOCAL_AUTH0_SUB, name="Local"))
-        session.commit()
+        security.ensure_local_user(session)
 
     response = cloud_client.get("/api/me")
 

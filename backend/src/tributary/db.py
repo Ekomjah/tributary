@@ -30,7 +30,8 @@ NAMING_CONVENTION = {
 }
 
 BASELINE_REVISION = "0001_baseline"
-HEAD_REVISION = "0003_users"
+USERS_REVISION = "0003_users"
+HEAD_REVISION = "0004_ownership"
 # Internal foreign-key anchor for account-free local installs. It is not an
 # account and is never accepted in cloud mode.
 LOCAL_AUTH0_SUB = "local"
@@ -230,8 +231,9 @@ def _legacy_sqlite_tables(engine: Engine, tables: set[str]) -> None:
     from . import models  # noqa: F401  (registers metadata)
 
     if "labels" not in tables:
-        # This file predates the label table. create_all can build the latest
-        # shape of every missing table, so stamp the whole chain as applied.
+        # This file predates the label table. create_all builds missing tables
+        # in their latest shape, so stamp the users revision and let the
+        # ownership migration add owner_id to tables that already existed.
         missing = [
             table
             for table in Base.metadata.sorted_tables
@@ -239,7 +241,8 @@ def _legacy_sqlite_tables(engine: Engine, tables: set[str]) -> None:
         ]
         if missing:
             Base.metadata.create_all(engine, tables=missing)
-        _stamp(engine, HEAD_REVISION)
+        _stamp(engine, USERS_REVISION)
+        _upgrade_to_head(engine)
         return
 
     # The file already contains the baseline label table, so 0002 must still

@@ -27,6 +27,7 @@ from tributary.boxes.plain import (
     SortBox,
 )
 from tributary.config import Settings
+from tributary.db import ensure_local_user
 from tributary.models import Feed, Item
 from tributary.schemas import ItemOut
 
@@ -190,6 +191,7 @@ def test_merge_joins_fetch_branches() -> None:
         session=None,  # type: ignore[arg-type]
         settings=None,  # type: ignore[arg-type]
         client=None,  # type: ignore[arg-type]
+        owner_id=1,
         sources=[first, second],
     )
 
@@ -207,7 +209,12 @@ def test_fetch_box_stores_and_returns_items(
         return httpx.Response(200, content=RSS.encode())
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    context = RunContext(session=db_session, settings=settings, client=client)
+    context = RunContext(
+        session=db_session,
+        settings=settings,
+        client=client,
+        owner_id=ensure_local_user(db_session).id,
+    )
 
     try:
         result = FetchBox(["https://example.com/feed.xml"]).run([], context)
@@ -224,7 +231,11 @@ def test_fulltext_box_stores_article_text(
     settings: Settings,
     db_session: Session,
 ) -> None:
-    feed = Feed(url="https://example.com/feed.xml", title="Example")
+    feed = Feed(
+        owner_id=ensure_local_user(db_session).id,
+        url="https://example.com/feed.xml",
+        title="Example",
+    )
     db_session.add(feed)
     db_session.flush()
     row = Item(
@@ -257,6 +268,7 @@ def test_fulltext_box_stores_article_text(
         session=db_session,
         settings=settings.model_copy(update={"article_delay_seconds": 0}),
         client=client,
+        owner_id=ensure_local_user(db_session).id,
     )
 
     try:
@@ -276,7 +288,12 @@ def test_run_pipe_applies_steps_in_order(
     db_session: Session,
 ) -> None:
     client = httpx.Client()
-    context = RunContext(session=db_session, settings=settings, client=client)
+    context = RunContext(
+        session=db_session,
+        settings=settings,
+        client=client,
+        owner_id=ensure_local_user(db_session).id,
+    )
     items = [
         make_item(
             1,

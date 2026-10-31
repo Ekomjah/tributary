@@ -1,3 +1,6 @@
 allowBuilds:
+  browser-tabs-lock: false
   sharp: false
   unrs-resolver: false
+minimumReleaseAgeExclude:
+  - '@auth0/auth0-react@2.30.0'

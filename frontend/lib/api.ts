@@ -1,5 +1,6 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
+import { getApiAccessToken, notifyApiUnauthorized } from "./api-auth";
 import type {
   ArticleFetch,
   Feed,
@@ -34,10 +35,32 @@ export class ApiError extends Error {
   }
 }
 
-const http = axios.create({
+export const apiHttp = axios.create({
   baseURL: apiBase,
   headers: { Accept: "application/json" },
 });
+
+apiHttp.interceptors.request.use(async (config) => {
+  const token = await getApiAccessToken();
+  if (token) {
+    config.headers.set("Authorization", `Bearer ${token}`);
+  }
+  return config;
+});
+
+apiHttp.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      error.config?.headers.get("Authorization")
+    ) {
+      notifyApiUnauthorized();
+    }
+    return Promise.reject(error);
+  },
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -80,7 +103,7 @@ function describeError(error: unknown): string {
 
 async function request<T>(config: AxiosRequestConfig): Promise<T> {
   try {
-    const response = await http.request<T>(config);
+    const response = await apiHttp.request<T>(config);
     if (response.status === 204) {
       return undefined as T;
     }

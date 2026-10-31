@@ -4,7 +4,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from ..models import Feed, Pipe
+from ..models import Feed
 from ..schemas import (
     FeedAddOut,
     FeedCandidateOut,
@@ -18,20 +18,34 @@ from ..schemas import (
 )
 from ..services import discovery, feeds, pipe_feeds
 from ..services.urls import UnsafeUrlError
-from .deps import DbSession
+from .deps import CurrentUser, DbSession
+from .ownership import owned_feed, owned_pipe
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
 
 
 @router.get("", response_model=list[FeedOut])
-def list_feeds(db: DbSession) -> list[Feed]:
-    return list(db.scalars(select(Feed).order_by(Feed.title, Feed.url)).all())
+def list_feeds(user: CurrentUser, db: DbSession) -> list[Feed]:
+    return list(
+        db.scalars(
+            select(Feed)
+            .where(Feed.owner_id == user.id)
+            .order_by(Feed.title, Feed.url)
+        ).all()
+    )
 
 
 @router.post("", response_model=FeedAddOut, status_code=status.HTTP_201_CREATED)
-def create_feed(payload: FeedCreate, request: Request, db: DbSession) -> FeedAddOut:
+def create_feed(
+    payload: FeedCreate,
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+) -> FeedAddOut:
     url = feeds.normalize_url(payload.url)
-    existing = db.scalar(select(Feed).where(Feed.url == url))
+    existing = db.scalar(
+        select(Feed).where(Feed.owner_id == user.id, Feed.url == url)
+    )
     if existing is not None:
         raise HTTPException(status_code=409, detail="That feed is already subscribed")
 
@@ -41,6 +55,7 @@ def create_feed(payload: FeedCreate, request: Request, db: DbSession) -> FeedAdd
             feed, result = feeds.add_feed(
                 db,
                 url,
+                owner_id=user.id,
                 client=client,
                 title=payload.title,
                 min_full_chars=settings.article_min_chars,
@@ -79,12 +94,15 @@ def create_feed(payload: FeedCreate, request: Request, db: DbSession) -> FeedAdd
 
 
 @router.post("/pipe", response_model=PipeFeedOut)
-def add_pipe_feed(payload: PipeFeedCreate, request: Request, db: DbSession) -> PipeFeedOut:
+def add_pipe_feed(
+    payload: PipeFeedCreate,
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+) -> PipeFeedOut:
     """Run a saved pipe and add its output to the reader as a feed."""
 
-    pipe = db.get(Pipe, payload.pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+    pipe = owned_pipe(db, user.id, payload.pipe_id)
 
     settings = request.app.state.settings
     with feeds.make_client(settings) as client:
@@ -111,10 +129,11 @@ def add_pipe_feed(payload: PipeFeedCreate, request: Request, db: DbSession) -> P
 
 
 @router.post("/refresh", response_model=list[FeedRefreshOut])
-def refresh_all(request: Request) -> list[FeedRefreshOut]:
+def refresh_all(user: CurrentUser, request: Request) -> list[FeedRefreshOut]:
     results = feeds.refresh_feeds(
         request.app.state.session_factory,
         request.app.state.settings,
+        owner_id=user.id,
     )
     return [FeedRefreshOut.model_validate(result) for result in results]
 
@@ -144,28 +163,26 @@ def discover_feed(payload: FeedDiscoverRequest, request: Request) -> FeedDiscove
 
 
 @router.get("/{feed_id}", response_model=FeedOut)
-def get_feed(feed_id: int, db: DbSession) -> Feed:
-    feed = db.get(Feed, feed_id)
-    if feed is None:
-        raise HTTPException(status_code=404, detail="Feed not found")
-    return feed
+def get_feed(feed_id: int, user: CurrentUser, db: DbSession) -> Feed:
+    return owned_feed(db, user.id, feed_id)
 
 
 @router.delete("/{feed_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_feed(feed_id: int, db: DbSession) -> Response:
-    feed = db.get(Feed, feed_id)
-    if feed is None:
-        raise HTTPException(status_code=404, detail="Feed not found")
+def delete_feed(feed_id: int, user: CurrentUser, db: DbSession) -> Response:
+    feed = owned_feed(db, user.id, feed_id)
     db.delete(feed)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{feed_id}/refresh", response_model=FeedRefreshOut)
-def refresh_feed(feed_id: int, request: Request, db: DbSession) -> FeedRefreshOut:
-    feed = db.get(Feed, feed_id)
-    if feed is None:
-        raise HTTPException(status_code=404, detail="Feed not found")
+def refresh_feed(
+    feed_id: int,
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+) -> FeedRefreshOut:
+    feed = owned_feed(db, user.id, feed_id)
     if feed.kind == "search":
         raise HTTPException(
             status_code=400,
@@ -200,6 +217,7 @@ def refresh_feed(feed_id: int, request: Request, db: DbSession) -> FeedRefreshOu
         result = feeds.fetch_feed(
             db,
             feed.url,
+            owner_id=user.id,
             client=client,
             min_full_chars=settings.article_min_chars,
         )

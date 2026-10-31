@@ -8,7 +8,13 @@ from typer.testing import CliRunner
 
 from tributary.cli import _settings_with_db_path, app
 from tributary.config import ConfigurationError, Settings
-from tributary.db import create_engine, create_session_factory, init_db, session_scope
+from tributary.db import (
+    create_engine,
+    create_session_factory,
+    ensure_local_user,
+    init_db,
+    session_scope,
+)
 from tributary.models import Feed, Item
 from tributary.services import discovery, feeds, refine
 from tributary.services import search as web_search
@@ -81,7 +87,7 @@ def test_db_option_forces_sqlite_over_postgres_environment(tmp_path: Path) -> No
 def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "cli.db"
 
-    def fake_fetch(session, url, *, client, min_full_chars=500):
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
         return feeds.FetchResult(
             url=url,
             feed_id=1,
@@ -111,7 +117,7 @@ def test_fetch_reports_new_items(tmp_path: Path, monkeypatch) -> None:
 def test_fetch_exits_nonzero_on_feed_errors(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "cli.db"
 
-    def fake_fetch(session, url, *, client, min_full_chars=500):
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
         return feeds.FetchResult(url=url, error="HTTPStatusError: 404")
 
     monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
@@ -219,7 +225,7 @@ def test_fetch_discovers_the_feed_first(tmp_path: Path, monkeypatch) -> None:
             ],
         )
 
-    def fake_fetch(session, url, *, client, min_full_chars=500):
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
         seen["url"] = url
         return feeds.FetchResult(url=url, feed_id=1, title="Found Feed", new_items=1)
 
@@ -244,7 +250,7 @@ def test_fetch_no_discover_uses_the_exact_url(tmp_path: Path, monkeypatch) -> No
     def fail_discover(client, url):
         raise AssertionError("discovery should not run with --no-discover")
 
-    def fake_fetch(session, url, *, client, min_full_chars=500):
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
         seen["url"] = url
         return feeds.FetchResult(url=url, feed_id=1, title="Exact", new_items=0)
 
@@ -312,7 +318,11 @@ def seed_labelled_item(db_path: Path, monkeypatch) -> None:
         init_db(engine)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
-            feed = Feed(url="https://example.com/feed.xml", title="Example")
+            feed = Feed(
+                owner_id=ensure_local_user(session).id,
+                url="https://example.com/feed.xml",
+                title="Example",
+            )
             session.add(feed)
             session.flush()
             session.add(

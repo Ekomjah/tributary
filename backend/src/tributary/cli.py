@@ -16,7 +16,7 @@ from . import __version__
 from .boxes import BoxError, PipeSpecError, RunContext, load_pipe_spec
 from .boxes import run_pipe as execute_pipe
 from .config import ConfigurationError, Settings, get_settings
-from .db import create_engine, create_session_factory, init_db, session_scope
+from .db import create_engine, create_session_factory, ensure_local_user, init_db, session_scope
 from .models import Feed, Item
 from .observability import init_sentry
 from .services import discovery, feeds, model, refine
@@ -261,9 +261,11 @@ def fetch(
             feeds.make_client(settings) as client,
             session_scope(factory) as session,
         ):
+            owner = ensure_local_user(session)
             result = feeds.fetch_feed(
                 session,
                 target,
+                owner_id=owner.id,
                 client=client,
                 min_full_chars=settings.article_min_chars,
             )
@@ -287,7 +289,10 @@ def refresh(
     engine = create_engine(settings)
     try:
         init_db(engine, settings)
-        results = feeds.refresh_feeds(create_session_factory(engine), settings)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            owner_id = ensure_local_user(session).id
+        results = feeds.refresh_feeds(factory, settings, owner_id=owner_id)
     except Exception as exc:
         typer.echo(f"Could not refresh feeds: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -349,10 +354,12 @@ def search_web(
         init_db(engine, settings)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
+            owner = ensure_local_user(session)
             outcome = web_search.run_search(
                 session,
                 settings,
                 params,
+                owner_id=owner.id,
                 raw_query=query,
             )
     except web_search.SearchError as exc:
@@ -424,11 +431,17 @@ def run_pipe_file(
             feeds.make_client(settings) as client,
             session_scope(factory) as session,
         ):
+            owner = ensure_local_user(session)
             spec = load_pipe_spec(path)
             transaction.set_data("pipe.name", spec.name or path.stem)
             result = execute_pipe(
                 spec,
-                RunContext(session=session, settings=settings, client=client),
+                RunContext(
+                    session=session,
+                    settings=settings,
+                    client=client,
+                    owner_id=owner.id,
+                ),
             )
     except (PipeSpecError, BoxError) as exc:
         typer.echo(f"Pipe failed: {exc}", err=True)
@@ -472,7 +485,14 @@ def export_training(
         init_db(engine, settings)
         factory = create_session_factory(engine)
         with session_scope(factory) as session:
-            stmt = select(Item).options(selectinload(Item.feed)).order_by(Item.id)
+            owner = ensure_local_user(session)
+            stmt = (
+                select(Item)
+                .join(Item.feed)
+                .options(selectinload(Item.feed))
+                .where(Feed.owner_id == owner.id)
+                .order_by(Item.id)
+            )
             if not include_all:
                 stmt = stmt.where(Item.decision.is_not(None))
             records = [_training_record(item) for item in session.scalars(stmt)]

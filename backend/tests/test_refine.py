@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from tributary.boxes.base import RunContext
 from tributary.boxes.search import SearchBox
 from tributary.config import Settings
+from tributary.db import ensure_local_user
 from tributary.services.model import ModelError
 from tributary.services.refine import (
     OllamaSearchRefiner,
@@ -311,6 +312,7 @@ def test_search_box_refines_before_calling_serpapi(
             session=db_session,
             settings=settings,
             client=client,
+            owner_id=ensure_local_user(db_session).id,
             refiner=refiner,
         )
         items = SearchBox("AI regulation this week", refine=True).run([], context)
@@ -357,6 +359,7 @@ def test_search_box_can_skip_refinement(
             session=db_session,
             settings=settings,
             client=client,
+            owner_id=ensure_local_user(db_session).id,
             refiner=refiner,
         )
         SearchBox("raw words", engine="google", max_results=3, refine=False).run(

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Item
+from ..models import Feed, Item
 from ..schemas import ItemOut
 from ..services import cache
 from .base import RunContext
@@ -223,14 +223,16 @@ class WhyCareBox:
     box = "whycare"
 
     def run(self, items: list[ItemOut], context: RunContext) -> list[ItemOut]:
+        stmt = (
+            select(Item.title)
+            .join(Item.feed)
+            .where(Item.starred.is_(True), Feed.owner_id == context.owner_id)
+            .order_by(Item.id.desc())
+            .limit(_STARRED_LIMIT)
+        )
         starred = [
             title
-            for title in context.session.scalars(
-                select(Item.title)
-                .where(Item.starred.is_(True))
-                .order_by(Item.id.desc())
-                .limit(_STARRED_LIMIT)
-            )
+            for title in context.session.scalars(stmt)
             if title
         ]
         taste = "\n".join(f"- {title}" for title in starred)

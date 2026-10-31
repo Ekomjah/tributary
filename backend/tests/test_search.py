@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tributary.config import Settings
 from tributary.db import utcnow
-from tributary.models import Feed, Item, SearchCache
+from tributary.models import Feed, Item, SearchCache, User
 from tributary.services import feeds
 from tributary.services import search as web_search
 
@@ -115,11 +115,14 @@ def test_search_without_a_key_fails_with_an_actionable_message() -> None:
 def test_run_search_persists_a_virtual_feed_and_items(
     db_session: Session,
     settings: Settings,
+    local_user: User,
 ) -> None:
     backend = FakeBackend(NEWS_PAYLOAD)
     params = web_search.make_params(settings, "AI regulation", freshness="week")
 
-    outcome = web_search.run_search(db_session, settings, params, backend=backend)
+    outcome = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     db_session.commit()
 
     assert outcome.cached is False
@@ -138,6 +141,7 @@ def test_run_search_persists_a_virtual_feed_and_items(
 def test_run_search_keeps_at_most_max_results(
     db_session: Session,
     settings: Settings,
+    local_user: User,
 ) -> None:
     payload = {
         "news_results": [
@@ -148,13 +152,17 @@ def test_run_search_keeps_at_most_max_results(
     backend = FakeBackend(payload)
     params = web_search.make_params(settings, "AI regulation", max_results=2)
 
-    outcome = web_search.run_search(db_session, settings, params, backend=backend)
+    outcome = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     db_session.commit()
 
     assert len(outcome.items) == 2
     assert len(db_session.scalars(select(Item)).all()) == 2
 
-    cached = web_search.run_search(db_session, settings, params, backend=backend)
+    cached = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     assert cached.cached is True
     assert len(cached.items) == 2
 
@@ -162,14 +170,19 @@ def test_run_search_keeps_at_most_max_results(
 def test_run_search_is_served_from_the_cache_until_it_expires(
     db_session: Session,
     settings: Settings,
+    local_user: User,
 ) -> None:
     backend = FakeBackend(NEWS_PAYLOAD)
     params = web_search.make_params(settings, "AI regulation")
 
-    web_search.run_search(db_session, settings, params, backend=backend)
+    web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     db_session.commit()
 
-    second = web_search.run_search(db_session, settings, params, backend=backend)
+    second = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     assert second.cached is True
     assert len(backend.calls) == 1
 
@@ -178,7 +191,9 @@ def test_run_search_is_served_from_the_cache_until_it_expires(
     row.expires_at = utcnow() - timedelta(seconds=1)
     db_session.commit()
 
-    third = web_search.run_search(db_session, settings, params, backend=backend)
+    third = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     assert third.cached is False
     assert len(backend.calls) == 2
 
@@ -186,12 +201,19 @@ def test_run_search_is_served_from_the_cache_until_it_expires(
 def test_run_search_maps_a_quota_error(
     db_session: Session,
     settings: Settings,
+    local_user: User,
 ) -> None:
     backend = FakeBackend(error=FakeHttpError())
     params = web_search.make_params(settings, "AI regulation")
 
     with pytest.raises(web_search.SearchError) as info:
-        web_search.run_search(db_session, settings, params, backend=backend)
+        web_search.run_search(
+            db_session,
+            settings,
+            params,
+            owner_id=local_user.id,
+            backend=backend,
+        )
 
     assert info.value.status_code == 429
     assert "quota" in str(info.value)
@@ -200,11 +222,14 @@ def test_run_search_maps_a_quota_error(
 def test_run_search_with_no_results_still_creates_the_feed(
     db_session: Session,
     settings: Settings,
+    local_user: User,
 ) -> None:
     backend = FakeBackend({})
     params = web_search.make_params(settings, "nothing matches")
 
-    outcome = web_search.run_search(db_session, settings, params, backend=backend)
+    outcome = web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
     db_session.commit()
 
     assert outcome.items == []
@@ -268,16 +293,30 @@ def test_search_api_reports_a_missing_key(
 def test_refresh_skips_search_feeds(
     session_factory: sessionmaker[Session],
     settings: Settings,
+    local_user: User,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with session_factory() as session:
-        session.add(Feed(url="search://abc", title="Search: x", kind="search"))
-        session.add(Feed(url="https://example.com/feed.xml", title="Example"))
+        session.add(
+            Feed(
+                owner_id=local_user.id,
+                url="search://abc",
+                title="Search: x",
+                kind="search",
+            )
+        )
+        session.add(
+            Feed(
+                owner_id=local_user.id,
+                url="https://example.com/feed.xml",
+                title="Example",
+            )
+        )
         session.commit()
 
     called: list[str] = []
 
-    def fake_fetch(session, url, *, client, min_full_chars=500):
+    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
         called.append(url)
         return feeds.FetchResult(
             url=url,
@@ -291,7 +330,9 @@ def test_refresh_skips_search_feeds(
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
     try:
-        results = feeds.refresh_feeds(session_factory, settings, client=client)
+        results = feeds.refresh_feeds(
+            session_factory, settings, owner_id=local_user.id, client=client
+        )
     finally:
         client.close()
 

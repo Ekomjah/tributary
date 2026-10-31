@@ -30,6 +30,7 @@ import {
 
 import AddFeedDialog from "@/components/add-feed-dialog";
 import AddLabelDialog from "@/components/add-label-dialog";
+import AccountMenu from "@/components/account-menu";
 import DeleteFeedDialog from "@/components/delete-feed-dialog";
 import Sidebar from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
@@ -926,6 +927,7 @@ export default function FeedsShell({
                 </p>
               </PopoverContent>
             </Popover>
+            <AccountMenu />
           </div>
         </header>
 

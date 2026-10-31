@@ -7,13 +7,15 @@ from sqlalchemy.orm import Session, selectinload
 from ..models import Feed, Item, Label, normalize_label_name, pipe_feed_items
 from ..schemas import ArticleFetchOut, Decision, ItemOut, ItemPage, ItemUpdate
 from ..services import articles
-from .deps import DbSession
+from .deps import CurrentUser, DbSession
+from .ownership import owned_feed, owned_item, owned_label
 
 router = APIRouter(prefix="/items", tags=["items"])
 
 
 def _item_query(
     *,
+    owner_id: int,
     unread: bool | None,
     starred: bool | None,
     feed_id: int | None,
@@ -22,7 +24,12 @@ def _item_query(
     q: str | None,
     decision: Decision | None,
 ):
-    stmt = select(Item).options(selectinload(Item.labels))
+    stmt = (
+        select(Item)
+        .join(Item.feed)
+        .options(selectinload(Item.labels))
+        .where(Feed.owner_id == owner_id)
+    )
     if unread is not None:
         stmt = stmt.where(Item.is_read.is_(not unread))
     if starred is not None:
@@ -40,10 +47,13 @@ def _item_query(
     else:
         # Search results live in virtual feeds. They show up under Searches,
         # not mixed into All items, Unread or Starred.
-        stmt = stmt.where(Item.feed.has(Feed.kind != "search"))
+        stmt = stmt.where(Feed.kind != "search")
     if label:
         stmt = stmt.where(
-            Item.labels.any(Label.name_key == normalize_label_name(label))
+            Item.labels.any(
+                (Label.owner_id == owner_id)
+                & (Label.name_key == normalize_label_name(label))
+            )
         )
     if decision is not None:
         stmt = stmt.where(Item.decision == decision)
@@ -61,6 +71,7 @@ def _item_query(
 
 @router.get("", response_model=ItemPage)
 def list_items(
+    user: CurrentUser,
     db: DbSession,
     unread: bool | None = None,
     starred: bool | None = None,
@@ -71,9 +82,11 @@ def list_items(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ItemPage:
-    feed = db.get(Feed, feed_id) if feed_id is not None else None
+    feed = owned_feed(db, user.id, feed_id) if feed_id is not None else None
+
     pipe_feed = feed is not None and feed.kind == "pipe"
     stmt = _item_query(
+        owner_id=user.id,
         unread=unread,
         starred=starred,
         feed_id=feed_id,
@@ -100,23 +113,19 @@ def list_items(
 
 
 @router.get("/{item_id}", response_model=ItemOut)
-def get_item(item_id: int, db: DbSession) -> Item:
-    item = db.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item
+def get_item(item_id: int, user: CurrentUser, db: DbSession) -> Item:
+    return owned_item(db, user.id, item_id)
 
 
 @router.post("/{item_id}/fetch", response_model=ArticleFetchOut)
 def fetch_item_article(
     item_id: int,
+    user: CurrentUser,
     request: Request,
     db: DbSession,
     force: bool = False,
 ) -> Item:
-    item = db.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
+    item = owned_item(db, user.id, item_id)
 
     settings = request.app.state.settings
     with articles.make_client(settings) as client:
@@ -133,10 +142,13 @@ def fetch_item_article(
 
 
 @router.patch("/{item_id}", response_model=ItemOut)
-def update_item(item_id: int, payload: ItemUpdate, db: DbSession) -> Item:
-    item = db.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
+def update_item(
+    item_id: int,
+    payload: ItemUpdate,
+    user: CurrentUser,
+    db: DbSession,
+) -> Item:
+    item = owned_item(db, user.id, item_id)
 
     fields = payload.model_fields_set
     if "is_read" in fields and payload.is_read is not None:
@@ -146,7 +158,7 @@ def update_item(item_id: int, payload: ItemUpdate, db: DbSession) -> Item:
     if "decision" in fields:
         item.decision = payload.decision
     if "label_ids" in fields and payload.label_ids is not None:
-        item.labels = _labels_for_ids(db, payload.label_ids)
+        item.labels = _labels_for_ids(db, payload.label_ids, owner_id=user.id)
 
     db.commit()
     db.refresh(item)
@@ -154,13 +166,14 @@ def update_item(item_id: int, payload: ItemUpdate, db: DbSession) -> Item:
 
 
 @router.post("/{item_id}/labels/{label_id}", response_model=ItemOut)
-def add_item_label(item_id: int, label_id: int, db: DbSession) -> Item:
-    item = db.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    label = db.get(Label, label_id)
-    if label is None:
-        raise HTTPException(status_code=404, detail="Label not found")
+def add_item_label(
+    item_id: int,
+    label_id: int,
+    user: CurrentUser,
+    db: DbSession,
+) -> Item:
+    item = owned_item(db, user.id, item_id)
+    label = owned_label(db, user.id, label_id)
 
     if label not in item.labels:
         item.labels.append(label)
@@ -170,13 +183,14 @@ def add_item_label(item_id: int, label_id: int, db: DbSession) -> Item:
 
 
 @router.delete("/{item_id}/labels/{label_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_item_label(item_id: int, label_id: int, db: DbSession) -> Response:
-    item = db.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    label = db.get(Label, label_id)
-    if label is None:
-        raise HTTPException(status_code=404, detail="Label not found")
+def remove_item_label(
+    item_id: int,
+    label_id: int,
+    user: CurrentUser,
+    db: DbSession,
+) -> Response:
+    item = owned_item(db, user.id, item_id)
+    label = owned_label(db, user.id, label_id)
 
     if label in item.labels:
         item.labels.remove(label)
@@ -184,11 +198,15 @@ def remove_item_label(item_id: int, label_id: int, db: DbSession) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _labels_for_ids(db: Session, label_ids: list[int]) -> list[Label]:
+def _labels_for_ids(db: Session, label_ids: list[int], *, owner_id: int) -> list[Label]:
     wanted = sorted(set(label_ids))
     if not wanted:
         return []
-    labels = list(db.scalars(select(Label).where(Label.id.in_(wanted))).all())
+    labels = list(
+        db.scalars(
+            select(Label).where(Label.id.in_(wanted), Label.owner_id == owner_id)
+        ).all()
+    )
     found = {label.id for label in labels}
     missing = [str(label_id) for label_id in wanted if label_id not in found]
     if missing:

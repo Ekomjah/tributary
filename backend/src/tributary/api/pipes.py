@@ -8,20 +8,32 @@ from ..boxes import PipeSpec
 from ..models import Feed, Pipe, Run
 from ..schemas import PipeCreate, PipeOut, PipeRunOut, PipeUpdate, RunOut
 from ..services import pipe_runs
-from .deps import AppSettings, DbSession
+from .deps import AppSettings, CurrentUser, DbSession
+from .ownership import owned_pipe
 
 router = APIRouter(prefix="/pipes", tags=["pipes"])
 
 
 @router.get("", response_model=list[PipeOut])
-def list_pipes(db: DbSession) -> list[Pipe]:
-    return list(db.scalars(select(Pipe).order_by(Pipe.updated_at.desc(), Pipe.id.desc())).all())
+def list_pipes(user: CurrentUser, db: DbSession) -> list[Pipe]:
+    return list(
+        db.scalars(
+            select(Pipe)
+            .where(Pipe.owner_id == user.id)
+            .order_by(Pipe.updated_at.desc(), Pipe.id.desc())
+        ).all()
+    )
 
 
 @router.post("", response_model=PipeOut, status_code=status.HTTP_201_CREATED)
-def create_pipe(payload: PipeCreate, db: DbSession) -> Pipe:
+def create_pipe(
+    payload: PipeCreate,
+    user: CurrentUser,
+    db: DbSession,
+) -> Pipe:
     spec = _validate_spec(payload.spec_json)
     pipe = Pipe(
+        owner_id=user.id,
         name=(payload.name or spec.name).strip()[:200],
         spec_json=payload.spec_json,
     )
@@ -32,23 +44,26 @@ def create_pipe(payload: PipeCreate, db: DbSession) -> Pipe:
 
 
 @router.get("/{pipe_id}", response_model=PipeOut)
-def get_pipe(pipe_id: int, db: DbSession) -> Pipe:
-    pipe = db.get(Pipe, pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+def get_pipe(pipe_id: int, user: CurrentUser, db: DbSession) -> Pipe:
+    pipe = owned_pipe(db, user.id, pipe_id)
     return pipe
 
 
 @router.patch("/{pipe_id}", response_model=PipeOut)
-def update_pipe(pipe_id: int, payload: PipeUpdate, db: DbSession) -> Pipe:
-    pipe = db.get(Pipe, pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+def update_pipe(
+    pipe_id: int,
+    payload: PipeUpdate,
+    user: CurrentUser,
+    db: DbSession,
+) -> Pipe:
+    pipe = owned_pipe(db, user.id, pipe_id)
 
     fields = payload.model_fields_set
     if "name" in fields and payload.name is not None:
         pipe.name = payload.name.strip()[:200]
-        linked_feed = db.scalar(select(Feed).where(Feed.pipe_id == pipe.id))
+        linked_feed = db.scalar(
+            select(Feed).where(Feed.pipe_id == pipe.id, Feed.owner_id == user.id)
+        )
         if linked_feed is not None:
             linked_feed.title = pipe.name[:500]
     if "spec_json" in fields and payload.spec_json is not None:
@@ -61,13 +76,13 @@ def update_pipe(pipe_id: int, payload: PipeUpdate, db: DbSession) -> Pipe:
 
 
 @router.delete("/{pipe_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_pipe(pipe_id: int, db: DbSession) -> Response:
-    pipe = db.get(Pipe, pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+def delete_pipe(pipe_id: int, user: CurrentUser, db: DbSession) -> Response:
+    pipe = owned_pipe(db, user.id, pipe_id)
     # Older SQLite databases have no ON DELETE CASCADE on feeds.pipe_id, so
     # remove the reader feed explicitly before the pipe row goes away.
-    linked_feed = db.scalar(select(Feed).where(Feed.pipe_id == pipe.id))
+    linked_feed = db.scalar(
+        select(Feed).where(Feed.pipe_id == pipe.id, Feed.owner_id == user.id)
+    )
     if linked_feed is not None:
         db.delete(linked_feed)
     db.delete(pipe)
@@ -82,15 +97,14 @@ def delete_pipe(pipe_id: int, db: DbSession) -> Response:
 )
 def start_pipe_run(
     pipe_id: int,
+    user: CurrentUser,
     request: Request,
     db: DbSession,
     settings: AppSettings,
 ) -> Run:
     """Start a pipe run on a worker and return the running record."""
 
-    pipe = db.get(Pipe, pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+    pipe = owned_pipe(db, user.id, pipe_id)
 
     run = pipe_runs.begin_run(db, pipe.id)
     pipe_runs.launch_run(
@@ -105,12 +119,11 @@ def start_pipe_run(
 @router.post("/{pipe_id}/run", response_model=PipeRunOut)
 def run_saved_pipe(
     pipe_id: int,
+    user: CurrentUser,
     db: DbSession,
     settings: AppSettings,
 ) -> PipeRunOut:
-    pipe = db.get(Pipe, pipe_id)
-    if pipe is None:
-        raise HTTPException(status_code=404, detail="Pipe not found")
+    pipe = owned_pipe(db, user.id, pipe_id)
 
     execution = pipe_runs.execute_pipe(db, settings, pipe)
     if execution.error or execution.run is None:

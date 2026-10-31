@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Loader2 } from "lucide-react";
 
 import FeedsShell from "@/components/feeds/feeds-shell";
+import RequireAuth from "@/components/require-auth";
 
 export const metadata: Metadata = {
   title: "Feeds — Tributary",
@@ -28,8 +29,10 @@ export default function FeedsLayout({
   children: React.ReactNode;
 }) {
   return (
-    <Suspense fallback={<FeedsFallback />}>
-      <FeedsShell>{children}</FeedsShell>
-    </Suspense>
+    <RequireAuth>
+      <Suspense fallback={<FeedsFallback />}>
+        <FeedsShell>{children}</FeedsShell>
+      </Suspense>
+    </RequireAuth>
   );
 }

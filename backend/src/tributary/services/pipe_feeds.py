@@ -43,7 +43,9 @@ def add_pipe_feed(
 ) -> PipeFeedResult:
     """Run a pipe and add its output to the reader as a feed."""
 
-    existing = session.scalar(select(Feed).where(Feed.pipe_id == pipe.id))
+    existing = session.scalar(
+        select(Feed).where(Feed.owner_id == pipe.owner_id, Feed.pipe_id == pipe.id)
+    )
     if existing is not None:
         return PipeFeedResult(
             feed=existing,
@@ -65,6 +67,7 @@ def add_pipe_feed(
         )
 
     feed = Feed(
+        owner_id=pipe.owner_id,
         url=pipe_feed_url(pipe.id),
         title=pipe_name[:500],
         kind="pipe",
@@ -112,6 +115,14 @@ def refresh_pipe_feed(
             items=0,
             seconds=0.0,
             error="The pipe for this feed no longer exists.",
+        )
+    if pipe.owner_id != feed.owner_id:
+        return PipeFeedResult(
+            feed=feed,
+            created=False,
+            items=0,
+            seconds=0.0,
+            error="The pipe for this feed belongs to another reader.",
         )
 
     feed_id = feed.id
@@ -166,7 +177,11 @@ def _replace_membership(session: Session, feed: Feed, item_ids: list[int]) -> No
         return
 
     existing_ids = set(
-        session.scalars(select(Item.id).where(Item.id.in_(unique_ids))).all()
+        session.scalars(
+            select(Item.id)
+            .join(Item.feed)
+            .where(Item.id.in_(unique_ids), Feed.owner_id == feed.owner_id)
+        ).all()
     )
     rows = [
         {"feed_id": feed.id, "item_id": item_id, "position": position}

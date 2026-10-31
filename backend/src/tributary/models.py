@@ -46,9 +46,17 @@ pipe_feed_items = Table(
 
 class Feed(Base):
     __tablename__ = "feeds"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "url", name="uq_feeds_owner_url"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     kind: Mapped[str] = mapped_column(String(16), nullable=False, default="feed", index=True)
     pipe_id: Mapped[int | None] = mapped_column(
@@ -63,6 +71,7 @@ class Feed(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
 
+    owner: Mapped[User] = relationship(back_populates="feeds")
     items: Mapped[list[Item]] = relationship(
         back_populates="feed",
         cascade="all, delete-orphan",
@@ -125,12 +134,21 @@ class Item(Base):
 
 class Label(Base):
     __tablename__ = "labels"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name_key", name="uq_labels_owner_name_key"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Stored explicitly so case-insensitive uniqueness works on PostgreSQL too.
-    name_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    name_key: Mapped[str] = mapped_column(String(200), nullable=False)
 
+    owner: Mapped[User] = relationship(back_populates="labels")
     items: Mapped[list[Item]] = relationship(
         secondary=item_labels,
         back_populates="labels",
@@ -149,6 +167,11 @@ class Pipe(Base):
     __tablename__ = "pipes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     spec_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
@@ -159,6 +182,7 @@ class Pipe(Base):
         onupdate=utcnow,
     )
 
+    owner: Mapped[User] = relationship(back_populates="pipes")
     runs: Mapped[list[Run]] = relationship(
         back_populates="pipe",
         cascade="all, delete-orphan",
@@ -219,6 +243,22 @@ class User(Base):
         UTCDateTime,
         nullable=False,
         default=utcnow,
+    )
+
+    feeds: Mapped[list[Feed]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    labels: Mapped[list[Label]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    pipes: Mapped[list[Pipe]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:
