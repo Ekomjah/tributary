@@ -22,7 +22,8 @@ describe("landingCopy", () => {
     const text = Object.values(copy).join(" ");
 
     expect(copy.eyebrow).toMatch(/^Hosted/);
-    expect(copy.storageRow).toContain("Auth0 accounts");
+    expect(copy.storageRow).toContain("PostgreSQL");
+    expect(text).not.toContain("SQLite");
     expect(text).not.toContain("No account");
     expect(text).not.toContain("No cloud");
     expect(text).not.toContain("Runs locally");

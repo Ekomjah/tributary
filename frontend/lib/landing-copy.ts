@@ -29,8 +29,8 @@ const CLOUD_COPY: LandingCopy = {
   privacyNote: "Private library. Sign in with your own account.",
   buildHeading: "Two processes, one JSON spec.",
   buildBody:
-    "The API is a small FastAPI service over SQLite. Feeds are fetched with httpx, parsed with feedparser and cleaned with trafilatura. Pipes are JSON specs executed by a box engine; the CLI and the API run the same spec. The reader is Next.js App Router with TanStack Query, and the editor is a React Flow canvas. AI boxes call a model through one client and cache each answer in SQLite.",
-  storageRow: "One SQLite file per library · Auth0 accounts",
+    "The API is a small FastAPI service over PostgreSQL. Feeds are fetched with httpx, parsed with feedparser and cleaned with trafilatura. Pipes are JSON specs executed by a box engine; the CLI and the API run the same spec. The reader is Next.js App Router with TanStack Query, and the editor is a React Flow canvas. AI boxes call a model through one client and cache each answer in PostgreSQL.",
+  storageRow: "PostgreSQL · one library per account",
   footerTagline: "Hosted. One account, no algorithm.",
 };
 

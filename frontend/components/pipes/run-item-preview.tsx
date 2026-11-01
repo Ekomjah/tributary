@@ -120,12 +120,6 @@ export default function RunItemPreview({
                     <span className="text-muted">By {item.author}</span>
                   </>
                 )}
-                {item.author && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span>By {item.author}</span>
-                  </>
-                )}
                 {readingTime > 0 && (
                   <>
                     <span aria-hidden="true">·</span>
