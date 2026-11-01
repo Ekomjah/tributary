@@ -160,6 +160,10 @@ export default function FeedsArticle({ slug }: { slug: string }) {
     router.push(backHref, { scroll: false });
   }, [backHref, beginScopeNavigation, router, scope]);
 
+  const beginBackNavigation = useCallback(() => {
+    beginScopeNavigation(scope);
+  }, [beginScopeNavigation, scope]);
+
   useEffect(() => {
     if (pendingArticle === null) {
       return;
@@ -299,6 +303,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       <ArticleNotFound
         backHref={backHref}
         message="The address does not point at an article in this reader."
+        onBackIntent={beginBackNavigation}
       />
     );
   }
@@ -309,6 +314,8 @@ export default function FeedsArticle({ slug }: { slug: string }) {
         <div className="flex items-center justify-between gap-3 border-b border-divider pb-2">
           <Link
             href={backHref}
+            scroll={false}
+            onNavigate={beginBackNavigation}
             className="text-[12px] text-accent hover:underline"
           >
             ← Back to {contextLabel}
@@ -331,6 +338,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
         <ArticleNotFound
           backHref={backHref}
           message="This article is no longer in the reader."
+          onBackIntent={beginBackNavigation}
         />
       );
     }
@@ -343,6 +351,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
             ? errorMessage(itemQuery.error)
             : "The address does not point at an article in this reader."
         }
+        onBackIntent={beginBackNavigation}
         onRetry={() => {
           void itemQuery.refetch();
         }}

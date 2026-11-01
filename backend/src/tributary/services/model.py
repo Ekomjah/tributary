@@ -255,6 +255,19 @@ class OllamaModelClient:
                     fail(exc)
 
             content = response.message.content or ""
+            if getattr(response, "done_reason", None) == "length":
+                # A cut-off object can look like a JSON error. Name the real
+                # cause so the caller can retry with a larger budget instead of
+                # trying to repair a truncated document.
+                span.set_status("internal_error")
+                service = "Ollama Cloud" if self.cloud else "Ollama"
+                message = (
+                    f"{service} at {self.host} stopped before finishing its JSON "
+                    f"({_MAX_OUTPUT_TOKENS} token limit)."
+                )
+                logger.warning("Ollama call failed: %s", message)
+                raise ModelError(message)
+
             span.set_data(
                 SPANDATA.GEN_AI_RESPONSE_MODEL,
                 getattr(response, "model", None) or self.model,

@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 import sentry_sdk
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,7 @@ from ..db import end_transaction
 from ..models import Feed, Item
 from ..schemas import ItemOut
 from ..services import cache
+from ..services.model import ModelError
 from .base import RunContext
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ def _ask(
     box: str,
     params: str,
     prompt: str,
-    schema: dict[str, Any],
+    output_model: type[BaseModel],
     system: str,
 ) -> dict[str, Any]:
     client = context.model_client()
@@ -99,7 +100,26 @@ def _ask(
         span.set_data("ai.box", box)
         span.set_data("ai.model", client.model)
         try:
-            output = client.generate_json(prompt, schema=schema, system=system)
+            output = client.generate_json(
+                prompt,
+                schema=output_model.model_json_schema(),
+                system=system,
+            )
+            # Parsing proves the reply is JSON, not that it has the fields the
+            # box asked for. Validate before caching or using the values, so a
+            # drifted model fails loudly instead of silently emptying the feed.
+            # Extra keys are ignored: a chatty cloud model should not fail a run
+            # when the fields the box needs are present.
+            expected = set(output_model.model_fields)
+            validated = output_model.model_validate(
+                {key: value for key, value in output.items() if key in expected}
+            )
+        except ValidationError as exc:
+            span.set_status("internal_error")
+            _record_metrics(box, client.model, started, status="error")
+            raise ModelError(
+                f"The model did not return the expected {output_model.__name__} fields."
+            ) from exc
         except Exception:
             span.set_status("internal_error")
             _record_metrics(box, client.model, started, status="error")
@@ -107,6 +127,7 @@ def _ask(
         span.set_data("ai.duration_ms", round((time.perf_counter() - started) * 1000, 1))
         _record_metrics(box, client.model, started, status="ok")
 
+    result = validated.model_dump()
     if row is not None:
         cache.set_cached(
             context.session,
@@ -114,9 +135,9 @@ def _ask(
             box=box,
             params_hash=params,
             model=client.model,
-            output=output,
+            output=result,
         )
-    return output
+    return result
 
 
 def _record_metrics(box: str, model: str, started: float, *, status: str) -> None:
@@ -165,7 +186,7 @@ class SummarizeBox:
                 box=self.box,
                 params=params,
                 prompt=_summary_prompt(item, text),
-                schema=SummaryOutput.model_json_schema(),
+                output_model=SummaryOutput,
                 system=(
                     "You summarize articles for a feed reader. Reply with one sentence "
                     "of at most 30 words, in the article's language. Use only facts "
@@ -212,7 +233,7 @@ class MeaningFilterBox:
                 box=self.box,
                 params=params,
                 prompt=_meaning_prompt(self.criterion, item, text),
-                schema=MeaningOutput.model_json_schema(),
+                output_model=MeaningOutput,
                 system=(
                     "You filter articles for a reader. Decide whether the article "
                     "matches the criterion. Be strict and do not stretch the meaning. "
@@ -265,7 +286,7 @@ class WhyCareBox:
                 box=self.box,
                 params=params,
                 prompt=_why_prompt(item, text, taste),
-                schema=WhyCareOutput.model_json_schema(),
+                output_model=WhyCareOutput,
                 system=(
                     "Explain in one sentence why this article might matter to this "
                     "reader, using only the article and the list of starred titles. "

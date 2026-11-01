@@ -125,6 +125,25 @@ def test_summarize_stores_the_summary_and_caches_it(
     assert len(model.prompts) == 1
 
 
+def test_summarize_ignores_extra_model_keys(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    row = seed_item(
+        db_session,
+        title="Post",
+        content_full="A long article about Python packaging.",
+    )
+    model = FakeModel(
+        [{"summary": "A short article about Python packaging.", "confidence": 0.9}]
+    )
+    context = context_for(db_session, settings, model)
+
+    result = SummarizeBox().run([ItemOut.model_validate(row)], context)
+
+    assert result[0].summary == "A short article about Python packaging."
+
+
 def test_summarize_cache_misses_when_the_text_changes(
     db_session: Session,
     settings: Settings,
@@ -187,6 +206,22 @@ def test_meaning_filter_keeps_matches_and_items_without_text(
     model.answers.append({"keep": False, "reason": "no"})
     MeaningFilterBox("cooking").run([ItemOut.model_validate(match)], context)
     assert len(model.prompts) == 3
+
+
+def test_meaning_filter_rejects_output_without_the_expected_fields(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    row = seed_item(
+        db_session,
+        title="Match",
+        content_full="An article about database migrations.",
+    )
+    model = FakeModel([{"matches": True}])
+    context = context_for(db_session, settings, model)
+
+    with pytest.raises(ModelError, match="MeaningOutput"):
+        MeaningFilterBox("databases").run([ItemOut.model_validate(row)], context)
 
 
 def test_why_care_uses_starred_items_and_caches(
@@ -325,6 +360,19 @@ def test_ollama_client_reports_a_timeout() -> None:
     client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
 
     with pytest.raises(ModelError, match="did not finish within 120s"):
+        client.generate_json("text", schema={"type": "object"})
+
+
+def test_ollama_client_reports_a_truncated_reply() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(
+            message=SimpleNamespace(content='{"summary": "cut off'),
+            done_reason="length",
+        )
+    )
+
+    with pytest.raises(ModelError, match="token limit"):
         client.generate_json("text", schema={"type": "object"})
 
 
