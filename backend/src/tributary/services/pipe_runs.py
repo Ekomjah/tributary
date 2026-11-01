@@ -14,7 +14,7 @@ from ..boxes import BoxRun, PipeRunError, PipeSpec, RunContext, run_pipe
 from ..config import Settings
 from ..models import Pipe, Run
 from ..schemas import BoxRunOut, ItemOut
-from . import feeds
+from . import feeds, quotas
 
 __all__ = [
     "PipeExecution",
@@ -39,10 +39,17 @@ class PipeExecution:
     error: str | None = None
 
 
-def begin_run(session: Session, pipe_id: int) -> Run:
-    """Create and commit a running run row before any work starts."""
+def begin_run(session: Session, pipe: Pipe, settings: Settings) -> Run:
+    """Check the hosted pipe-run quota, then commit a running run row."""
 
-    run = Run(pipe_id=pipe_id, status="running")
+    quotas.consume(
+        session,
+        user_id=pipe.owner_id,
+        kind="pipe_run",
+        limit=settings.pipe_runs_per_hour,
+        settings=settings,
+    )
+    run = Run(pipe_id=pipe.id, status="running")
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -58,7 +65,7 @@ def execute_pipe(
 ) -> PipeExecution:
     """Run a saved pipe synchronously and persist its result."""
 
-    run = begin_run(session, pipe.id)
+    run = begin_run(session, pipe, settings)
     return execute_run(session, settings, pipe, run.id, client=client)
 
 

@@ -31,7 +31,7 @@ NAMING_CONVENTION = {
 
 BASELINE_REVISION = "0001_baseline"
 USERS_REVISION = "0003_users"
-HEAD_REVISION = "0004_ownership"
+HEAD_REVISION = "0005_usage_events"
 # Internal foreign-key anchor for account-free local installs. It is not an
 # account and is never accepted in cloud mode.
 LOCAL_AUTH0_SUB = "local"
@@ -51,6 +51,10 @@ _BASELINE_TABLES = frozenset(
         "search_cache",
     }
 )
+# Tables present once 0003_users has run. Older SQLite files may be stamped at
+# that revision and then upgraded, so only these tables may be filled in with
+# create_all; later tables must be left to their own migration.
+_USERS_TABLES = _BASELINE_TABLES | {"users"}
 
 
 class Base(DeclarativeBase):
@@ -237,7 +241,7 @@ def _legacy_sqlite_tables(engine: Engine, tables: set[str]) -> None:
         missing = [
             table
             for table in Base.metadata.sorted_tables
-            if table.name not in tables
+            if table.name not in tables and table.name in _USERS_TABLES
         ]
         if missing:
             Base.metadata.create_all(engine, tables=missing)

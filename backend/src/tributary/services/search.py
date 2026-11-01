@@ -19,7 +19,7 @@ from ..config import Settings
 from ..db import utcnow
 from ..models import Feed, Item, SearchCache
 from ..schemas import ItemOut
-from . import feeds
+from . import feeds, quotas
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +185,13 @@ def run_search(
         _metric_count("search.cache_hits", {"engine": params.engine})
     else:
         active_backend = make_backend(settings, backend)
+        quotas.consume(
+            session,
+            user_id=owner_id,
+            kind="search",
+            limit=settings.searches_per_hour,
+            settings=settings,
+        )
         payload = _call_backend(active_backend, params, started)
         # google_news ignores `num`, so enforce the requested cap ourselves.
         results = normalize_results(payload, params.engine)[: params.max_results]

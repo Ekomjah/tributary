@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "pipes",
     "runs",
     "search_cache",
+    "usage_events",
     "users",
 }
 

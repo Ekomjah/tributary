@@ -260,6 +260,11 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    usage_events: Mapped[list[UsageEvent]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def __repr__(self) -> str:
         return f"User(id={self.id!r}, auth0_sub={self.auth0_sub!r})"
@@ -298,3 +303,38 @@ class SearchCache(Base):
 
     def __repr__(self) -> str:
         return f"SearchCache(params_hash={self.params_hash!r})"
+
+
+class UsageEvent(Base):
+    """One hosted-account action counted against a rolling quota."""
+
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        Index(
+            "ix_usage_events_user_kind_created",
+            "user_id",
+            "kind",
+            "created_at",
+        ),
+        Index("ix_usage_events_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime,
+        nullable=False,
+        default=utcnow,
+    )
+
+    user: Mapped[User] = relationship(back_populates="usage_events")
+
+    def __repr__(self) -> str:
+        return (
+            f"UsageEvent(id={self.id!r}, user_id={self.user_id!r}, "
+            f"kind={self.kind!r})"
+        )

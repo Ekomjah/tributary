@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from ..schemas import ItemOut
-from ..services import search
+from ..services import quotas, search
 from .base import BoxError, RunContext
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,8 @@ class SearchBox:
                 owner_id=context.owner_id,
                 raw_query=self.query,
             )
+        except quotas.LimitExceeded as exc:
+            raise BoxError(f"search quota: {exc}") from exc
         except search.SearchError as exc:
             raise BoxError(f"search failed: {exc}") from exc
 

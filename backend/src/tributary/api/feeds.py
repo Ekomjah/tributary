@@ -16,7 +16,7 @@ from ..schemas import (
     PipeFeedCreate,
     PipeFeedOut,
 )
-from ..services import discovery, feeds, pipe_feeds
+from ..services import discovery, feeds, pipe_feeds, quotas
 from ..services.urls import UnsafeUrlError
 from .deps import CurrentUser, DbSession
 from .ownership import owned_feed, owned_pipe
@@ -129,10 +129,22 @@ def add_pipe_feed(
 
 
 @router.post("/refresh", response_model=list[FeedRefreshOut])
-def refresh_all(user: CurrentUser, request: Request) -> list[FeedRefreshOut]:
+def refresh_all(
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+) -> list[FeedRefreshOut]:
+    settings = request.app.state.settings
+    quotas.consume(
+        db,
+        user_id=user.id,
+        kind="feed_refresh",
+        limit=settings.feed_refreshes_per_hour,
+        settings=settings,
+    )
     results = feeds.refresh_feeds(
         request.app.state.session_factory,
-        request.app.state.settings,
+        settings,
         owner_id=user.id,
     )
     return [FeedRefreshOut.model_validate(result) for result in results]
@@ -213,6 +225,13 @@ def refresh_feed(
             error=pipe_result.error,
         )
 
+    quotas.consume(
+        db,
+        user_id=user.id,
+        kind="feed_refresh",
+        limit=settings.feed_refreshes_per_hour,
+        settings=settings,
+    )
     with feeds.make_client(settings) as client:
         result = feeds.fetch_feed(
             db,

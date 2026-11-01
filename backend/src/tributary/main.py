@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .api import feeds, items, labels, me, pipes, refine, runs, search_source
@@ -15,8 +16,23 @@ from .db import create_engine, create_session_factory, init_db
 from .observability import init_sentry
 from .schemas import HealthOut
 from .services import pipe_runs
+from .services.quotas import LimitExceeded
 
 logger = logging.getLogger(__name__)
+
+
+async def _limit_exceeded_handler(
+    request: Request,
+    exc: LimitExceeded,
+) -> JSONResponse:
+    headers: dict[str, str] = {}
+    if exc.retry_after is not None:
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": str(exc)},
+        headers=headers or None,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -54,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_exception_handler(LimitExceeded, _limit_exceeded_handler)
 
     @app.get("/", tags=["meta"])
     def root() -> dict[str, str | None]:

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from ..boxes import PipeSpec
 from ..models import Feed, Pipe, Run
 from ..schemas import PipeCreate, PipeOut, PipeRunOut, PipeUpdate, RunOut
-from ..services import pipe_runs
+from ..services import pipe_runs, quotas
 from .deps import AppSettings, CurrentUser, DbSession
 from .ownership import owned_pipe
 
@@ -30,8 +30,15 @@ def create_pipe(
     payload: PipeCreate,
     user: CurrentUser,
     db: DbSession,
+    settings: AppSettings,
 ) -> Pipe:
     spec = _validate_spec(payload.spec_json)
+    quotas.ensure_pipe_slot(
+        db,
+        user_id=user.id,
+        limit=settings.max_pipes,
+        settings=settings,
+    )
     pipe = Pipe(
         owner_id=user.id,
         name=(payload.name or spec.name).strip()[:200],
@@ -106,7 +113,7 @@ def start_pipe_run(
 
     pipe = owned_pipe(db, user.id, pipe_id)
 
-    run = pipe_runs.begin_run(db, pipe.id)
+    run = pipe_runs.begin_run(db, pipe, settings)
     pipe_runs.launch_run(
         request.app.state.session_factory,
         settings,

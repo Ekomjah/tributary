@@ -175,6 +175,38 @@ class Settings(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("TRIBUTARY_FETCH_TIMEOUT", "FETCH_TIMEOUT"),
     )
+    # Hosted-profile quotas. Local installations ignore every one of these;
+    # see services.quotas. Keep them tunable so a deployment can change a plan
+    # without a code change.
+    max_pipes: int = Field(
+        default=5,
+        ge=1,
+        validation_alias=AliasChoices("TRIBUTARY_MAX_PIPES", "MAX_PIPES"),
+    )
+    pipe_runs_per_hour: int = Field(
+        default=3,
+        ge=1,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_PIPE_RUNS_PER_HOUR",
+            "PIPE_RUNS_PER_HOUR",
+        ),
+    )
+    searches_per_hour: int = Field(
+        default=3,
+        ge=1,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_SEARCHES_PER_HOUR",
+            "SEARCHES_PER_HOUR",
+        ),
+    )
+    feed_refreshes_per_hour: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_FEED_REFRESHES_PER_HOUR",
+            "FEED_REFRESHES_PER_HOUR",
+        ),
+    )
     article_timeout: float = Field(
         default=15.0,
         gt=0,
