@@ -1,3 +1,4 @@
+import { api } from "./api";
 import { hostOf, slugify } from "./text";
 import type { Feed, Item, ItemView } from "./types";
 
@@ -75,6 +76,61 @@ export function scopeLabel(scope: FeedsScope, feeds: Feed[]): string {
 
 export function itemsQueryKey(scope: FeedsScope) {
   return ["items", scope.view, scope.feedId, scope.label, scope.query] as const;
+}
+
+export function itemsQueryOptions(scope: FeedsScope) {
+  return {
+    queryKey: itemsQueryKey(scope),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      api.listItems({
+        unread: scope.view === "unread" ? true : undefined,
+        starred: scope.view === "starred" ? true : undefined,
+        feedId: scope.feedId,
+        label: scope.label,
+        q: scope.query || undefined,
+        limit: PAGE_SIZE,
+        signal,
+      }),
+  };
+}
+
+export function sameScope(left: FeedsScope, right: FeedsScope): boolean {
+  return (
+    left.view === right.view &&
+    left.feedId === right.feedId &&
+    left.label === right.label &&
+    left.query === right.query
+  );
+}
+
+/** Compare only what the sidebar and view tabs point at, ignoring search. */
+export function sameScopeLocation(
+  left: FeedsScope,
+  right: FeedsScope,
+): boolean {
+  return (
+    left.view === right.view &&
+    left.feedId === right.feedId &&
+    left.label === right.label
+  );
+}
+
+export function scopeKey(scope: FeedsScope): string {
+  return `${scope.view}|${scope.feedId ?? ""}|${scope.label ?? ""}|${scope.query}`;
+}
+
+export function scopeDescription(scope: FeedsScope, feeds: Feed[]): string {
+  if (scope.query) {
+    return `results for “${scope.query}”`;
+  }
+  if (scope.label) {
+    return `label “${scope.label}”`;
+  }
+  if (scope.feedId !== null) {
+    const feed = feeds.find((entry) => entry.id === scope.feedId);
+    return feed ? `“${feed.title || hostOf(feed.url)}”` : "the feed";
+  }
+  return VIEW_NAMES[scope.view];
 }
 
 export function scopeAfterFeedDelete(

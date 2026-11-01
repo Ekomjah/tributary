@@ -71,7 +71,18 @@ def _version_callback(value: bool) -> None:
 
 
 def _model_installed(configured: str, installed: list[str]) -> bool:
-    return configured in installed or f"{configured}:latest" in installed
+    """Match a model tag, treating Ollama Cloud's ``-cloud`` suffix as optional.
+
+    The cloud ``/api/tags`` listing returns the base tag (``gemma4:31b``) while
+    chat requests use the cloud alias (``gemma4:31b-cloud``), so a strict string
+    comparison would warn about a model that works.
+    """
+
+    wanted = configured.removesuffix("-cloud")
+    return any(
+        name.removesuffix("-cloud") in {wanted, f"{wanted}:latest"}
+        for name in installed
+    )
 
 
 def _training_record(item: Item) -> dict[str, object]:

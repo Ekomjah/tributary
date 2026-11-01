@@ -128,6 +128,26 @@ def run_pipe(
     steps: list[BoxRun] = []
 
     for index, step in enumerate(resolved.steps):
+        if time.perf_counter() - started > context.settings.pipe_run_timeout:
+            message = (
+                "The run exceeded its "
+                f"{context.settings.pipe_run_timeout:g}s time budget."
+            )
+            failed = BoxRun(
+                box=step.box,
+                seconds=0.0,
+                items_in=len(items),
+                items_out=0,
+                status="error",
+                error=message,
+            )
+            raise PipeRunError(
+                step_index=index,
+                box=step.box,
+                steps=[*steps, failed],
+                cause=TimeoutError(message),
+            )
+
         box = _build_box(step)
         in_count = len(items)
         step_started = time.perf_counter()
@@ -138,6 +158,10 @@ def run_pipe(
             span.set_data("pipe.items.in", in_count)
             try:
                 items = box.run(items, context)
+                # End each step's transaction before the next one starts. A
+                # later step can spend minutes on network I/O, and Neon closes
+                # connections that stay idle in a transaction for five minutes.
+                context.session.commit()
             except Exception as exc:
                 span.set_status("internal_error")
                 failed = BoxRun(

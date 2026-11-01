@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import httpx
 import sentry_sdk
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..boxes import BoxRun, PipeRunError, PipeSpec, RunContext, run_pipe
@@ -26,6 +27,17 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_DISCONNECT_SQLSTATES = frozenset({"25P03", "57P01", "57P05", "08003", "08006"})
+_DISCONNECT_MARKERS = (
+    "idle-in-transaction timeout",
+    "idle_in_transaction_session_timeout",
+    "terminating connection",
+    "server closed the connection unexpectedly",
+    "connection is closed",
+    "connection already closed",
+    "could not receive data from server",
+)
 
 
 @dataclass(slots=True)
@@ -124,9 +136,9 @@ def execute_run(
             item_ids=item_ids,
         )
     except PipeRunError as exc:
-        session.rollback()
-        message = str(exc)[:4000]
-        run = _mark_run_error(
+        _rollback_quietly(session)
+        message = _run_error_message(exc.cause, fallback=str(exc))
+        run = _record_failure(
             session,
             run_id,
             message,
@@ -142,9 +154,9 @@ def execute_run(
             error=message,
         )
     except Exception as exc:
-        session.rollback()
-        message = f"{type(exc).__name__}: {exc}"[:4000]
-        run = _mark_run_error(
+        _rollback_quietly(session)
+        message = _run_error_message(exc, fallback=f"{type(exc).__name__}: {exc}")
+        run = _record_failure(
             session,
             run_id,
             message,
@@ -233,6 +245,62 @@ def reap_interrupted_runs(session_factory: sessionmaker[Session]) -> int:
             run.seconds = None
         session.commit()
         return len(runs)
+
+
+def _rollback_quietly(session: Session) -> None:
+    """Release a failed run's connection without masking the original error."""
+
+    try:
+        session.rollback()
+    except Exception:
+        logger.debug("Could not roll back a failed pipe run", exc_info=True)
+
+
+def _is_connection_lost(exc: BaseException) -> bool:
+    """Return whether a database error means the backend closed the session."""
+
+    original = getattr(exc, "orig", exc)
+    if getattr(original, "sqlstate", None) in _DISCONNECT_SQLSTATES:
+        return True
+    if isinstance(exc, DBAPIError) and exc.connection_invalidated:
+        return True
+    text = str(original).lower()
+    return any(marker in text for marker in _DISCONNECT_MARKERS)
+
+
+def _run_error_message(exc: BaseException, *, fallback: str) -> str:
+    if _is_connection_lost(exc):
+        return (
+            "The database connection expired before the run finished. "
+            "Start the run again."
+        )
+    return fallback[:4000]
+
+
+def _record_failure(
+    session: Session,
+    run_id: int,
+    message: str,
+    **kwargs: object,
+) -> Run | None:
+    """Record a failed run on a fresh connection.
+
+    The run's session may be the one Neon just terminated, so writing the
+    failure through it can fail as well and leave the row stuck on ``running``.
+    """
+
+    try:
+        with _failure_session(session) as fresh:
+            return _mark_run_error(fresh, run_id, message, **kwargs)
+    except Exception:
+        logger.exception("Could not record the failure of pipe run %s", run_id)
+        return None
+
+
+def _failure_session(session: Session) -> Session:
+    """Open a short session bound to the same engine as ``session``."""
+
+    return sessionmaker(bind=session.get_bind(), expire_on_commit=False)()
 
 
 def _mark_run_error(

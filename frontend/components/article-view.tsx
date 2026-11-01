@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   ArrowLeft,
   Circle,
   CircleCheck,
   ExternalLink,
+  Loader2,
   Sparkles,
   Star,
   Tag,
@@ -24,6 +26,8 @@ interface ArticleViewProps {
   labels: Label[];
   contextLabel: string;
   fetching: boolean;
+  pendingTitle: string | null;
+  focusItemId: number | null;
   onBack: () => void;
   onToggleStar: (item: Item) => void;
   onToggleRead: (item: Item) => void;
@@ -39,6 +43,8 @@ export default function ArticleView({
   labels,
   contextLabel,
   fetching,
+  pendingTitle,
+  focusItemId,
   onBack,
   onToggleStar,
   onToggleRead,
@@ -49,6 +55,13 @@ export default function ArticleView({
   const text = item.content_full ?? item.content;
   const readingTime = readingMinutes(plainText(text));
   const published = item.published ?? item.fetched_at;
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (focusItemId !== null && focusItemId === item.id) {
+      headingRef.current?.focus();
+    }
+  }, [focusItemId, item.id]);
 
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4">
@@ -68,9 +81,27 @@ export default function ArticleView({
         </span>
       </div>
 
-      <article className="pt-5">
+      {pendingTitle && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-2 flex items-center gap-1.5 text-[11px] text-muted"
+        >
+          <Loader2
+            className="size-3 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+          <span className="truncate">Opening “{pendingTitle}”…</span>
+        </div>
+      )}
+
+      <article className="pt-5" aria-busy={pendingTitle ? true : undefined}>
         <header>
-          <h1 className="font-reading text-[26px] font-bold leading-[1.22] text-accent text-balance max-[700px]:text-[23px]">
+          <h1
+            ref={headingRef}
+            tabIndex={-1}
+            className="font-reading text-[26px] font-bold leading-[1.22] text-accent text-balance focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent max-[700px]:text-[23px]"
+          >
             {item.link ? (
               <a
                 href={item.link}

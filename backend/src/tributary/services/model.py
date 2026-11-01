@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, Protocol
 
@@ -24,10 +25,52 @@ __all__ = [
 
 _REPEAT_LIMIT = "token repeat limit"
 _MAX_OUTPUT_TOKENS = 512
+_FENCED_JSON = re.compile(r"```(?:json)?\s*(?P<body>.*?)\s*```", re.DOTALL)
 
 
 class ModelError(RuntimeError):
     """The model was unreachable, timed out, or rejected the request."""
+
+
+def _load_json_object(content: str) -> dict[str, Any]:
+    """Parse a JSON object from model output, tolerating Markdown fences.
+
+    Ollama Cloud currently ignores the structured-output ``format`` hint for
+    some models and wraps the object in a ```json fence. Small local models do
+    the same. Accept a fenced block, a bare object, or an object surrounded by
+    prose instead of failing the whole pipe.
+    """
+
+    text = content.strip()
+    if not text:
+        raise ModelError("The model did not return valid JSON.")
+
+    candidates = [match.group("body").strip() for match in _FENCED_JSON.finditer(text)]
+    candidates.append(text)
+
+    decoder = json.JSONDecoder()
+    parsed_something = False
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            start = candidate.find("{")
+            if start < 0:
+                continue
+            try:
+                data, _ = decoder.raw_decode(candidate[start:])
+            except json.JSONDecodeError:
+                continue
+
+        parsed_something = True
+        if isinstance(data, dict):
+            return data
+
+    if parsed_something:
+        raise ModelError("The model did not return a JSON object.")
+    raise ModelError("The model did not return valid JSON.")
 
 
 def _is_repeat_abort(exc: ollama.ResponseError) -> bool:
@@ -226,14 +269,10 @@ class OllamaModelClient:
                 )
 
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
+            return _load_json_object(content)
+        except ModelError:
             logger.warning("Ollama returned invalid JSON")
-            raise ModelError("The model did not return valid JSON.") from exc
-
-        if not isinstance(data, dict):
-            raise ModelError("The model did not return a JSON object.")
-        return data
+            raise
 
 
 def check_ollama(settings: Settings) -> tuple[bool, str, list[str]]:

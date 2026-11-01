@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..db import end_transaction
 from ..models import Feed, Item
 from ..schemas import ItemOut
 from ..services import cache
@@ -88,6 +89,11 @@ def _ask(
         if cached is not None:
             return cached
 
+    # The cache lookup opened a transaction. End it before the model call: a
+    # slow generation would otherwise leave the connection idle in a transaction
+    # long enough for Neon to close it.
+    end_transaction(context.session)
+
     started = time.perf_counter()
     with sentry_sdk.start_span(op="ai.generate", name=box) as span:
         span.set_data("ai.box", box)
@@ -143,6 +149,7 @@ class SummarizeBox:
 
     def run(self, items: list[ItemOut], context: RunContext) -> list[ItemOut]:
         for item in items:
+            end_transaction(context.session)
             row, text = _row_and_text(context.session, item, full_only=True)
             if not text:
                 # Extraction failed or has not run. Do not summarize the stub.
@@ -162,7 +169,8 @@ class SummarizeBox:
                 system=(
                     "You summarize articles for a feed reader. Reply with one sentence "
                     "of at most 30 words, in the article's language. Use only facts "
-                    "that appear in the text."
+                    "that appear in the text. Reply with JSON only, using exactly one "
+                    'key: {"summary": "<one sentence>"}'
                 ),
             )
             summary = _clean(output.get("summary"))
@@ -186,6 +194,7 @@ class MeaningFilterBox:
         kept: list[ItemOut] = []
 
         for item in items:
+            end_transaction(context.session)
             row, text = _row_and_text(context.session, item, full_only=False)
             if not text:
                 # No text to judge. Keep it rather than silently losing items.
@@ -207,7 +216,8 @@ class MeaningFilterBox:
                 system=(
                     "You filter articles for a reader. Decide whether the article "
                     "matches the criterion. Be strict and do not stretch the meaning. "
-                    "Reply with JSON only."
+                    "Reply with JSON only: "
+                    '{"keep": true or false, "reason": "<short reason>"}'
                 ),
             )
             if bool(output.get("keep")):
@@ -239,6 +249,7 @@ class WhyCareBox:
         taste_hash = cache.content_hash(taste)
 
         for item in items:
+            end_transaction(context.session)
             row, text = _row_and_text(context.session, item, full_only=False)
             if not text:
                 continue
@@ -258,7 +269,8 @@ class WhyCareBox:
                 system=(
                     "Explain in one sentence why this article might matter to this "
                     "reader, using only the article and the list of starred titles. "
-                    "If there is no clear connection, say so plainly."
+                    "If there is no clear connection, say so plainly. Reply with JSON "
+                    'only: {"why": "<one sentence>"}'
                 ),
             )
             why = _clean(output.get("why"))

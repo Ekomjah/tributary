@@ -156,6 +156,7 @@ The canvas keeps the same flat language, so it doesn't feel like a different app
 | Selected / focused | `--blue-bg` row (sidebar) or 3px `--blue` left border (item) |
 | Hover | `#f0f0f0` row |
 | Loading | Small inline spinner plus text `Loading...`; never block the whole page |
+| Pending navigation | Target row active immediately; 2px `--blue` activity rule under the sub bar, turning `--amber` after 1.5s; inline spinner and text after 120ms; the old list stays readable |
 | Empty list | Centered `--text-2` message, e.g. "No unread items" with a link to All items |
 | Error | `--red` text with a warning-triangle icon, and a plain-language message |
 | Slow or stale | `--amber` clock icon plus the time, e.g. `4.2 s per item` |
@@ -164,6 +165,8 @@ The canvas keeps the same flat language, so it doesn't feel like a different app
 ## Motion
 
 Minimal. Allow a 100ms color transition on hover and a spinner for loading. No slide-ins, bounces or page transitions. Respect `prefers-reduced-motion` (turn off the spinner animation and show text instead).
+
+Navigation is a state, not a transition: acknowledge the click immediately, keep the old content readable, and hard-cut to the new one when it arrives. Delay the spinner by 120ms so cached moves do not flash.
 
 ## Accessibility
 

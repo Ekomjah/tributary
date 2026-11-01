@@ -1,25 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
 import ArticleList from "@/components/article-list";
 import { useFeeds } from "@/components/feeds/feeds-shell";
-import { api } from "@/lib/api";
 import {
   articleHref,
   itemIdFromHash,
-  itemsQueryKey,
-  PAGE_SIZE,
+  itemsQueryOptions,
+  sameScope,
+  scopeDescription,
+  scopeKey,
   scopeLabel,
 } from "@/lib/feeds";
 import type { Item } from "@/lib/types";
 
 export default function FeedsList() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const {
     scope,
+    effectiveScope,
+    pendingScope,
+    pendingSince,
+    navigateToScope,
+    completeScopeNavigation,
     feeds,
     labels,
     feedNames,
@@ -32,33 +43,26 @@ export default function FeedsList() {
     openAddFeed,
     clearSearch,
     shortcutsBlocked,
-    showError,
     scrollToTop,
   } = useFeeds();
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const scopeKey = `${scope.view}|${scope.feedId ?? ""}|${scope.label ?? ""}|${scope.query}`;
-  const lastScopeKey = useRef(scopeKey);
+  const [openingId, setOpeningId] = useState<number | null>(null);
+  const [displayedScope, setDisplayedScope] = useState(effectiveScope);
+  const key = scopeKey(effectiveScope);
+  const lastScopeKey = useRef(key);
   const restoredScope = useRef<string | null>(null);
 
   const itemsQuery = useQuery({
-    queryKey: itemsQueryKey(scope),
-    queryFn: ({ signal }) =>
-      api.listItems({
-        unread: scope.view === "unread" ? true : undefined,
-        starred: scope.view === "starred" ? true : undefined,
-        feedId: scope.feedId,
-        label: scope.label,
-        q: scope.query || undefined,
-        limit: PAGE_SIZE,
-        signal,
-      }),
+    ...itemsQueryOptions(effectiveScope),
     placeholderData: keepPreviousData,
   });
+  const { refetch: refetchItems } = itemsQuery;
 
   const items = useMemo(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
   const total = itemsQuery.data?.total ?? 0;
-  const loading = itemsQuery.isFetching;
+  const loading = itemsQuery.isPending;
+  const busy = itemsQuery.isFetching || pendingScope !== null;
 
   const hashItemId =
     typeof window === "undefined"
@@ -80,34 +84,77 @@ export default function FeedsList() {
     [items, selectedItemId],
   );
 
-  const heading = scopeLabel(scope, feeds);
+  const heading = scopeLabel(effectiveScope, feeds);
+  const pendingLabel = pendingScope
+    ? scopeDescription(pendingScope, feeds)
+    : "";
+  const showingPrevious =
+    pendingScope !== null && itemsQuery.isPlaceholderData && items.length > 0;
+  const previousHeading = scopeLabel(displayedScope, feeds);
   const hasFilters = Boolean(
-    scope.query || scope.label || scope.feedId !== null,
+    effectiveScope.query ||
+      effectiveScope.label ||
+      effectiveScope.feedId !== null,
   );
 
   useEffect(() => {
-    if (itemsQuery.error) {
-      showError(itemsQuery.error);
-    }
-  }, [itemsQuery.error, showError]);
-
-  useEffect(() => {
-    if (lastScopeKey.current === scopeKey) {
+    if (!pendingScope || !sameScope(scope, pendingScope)) {
       return;
     }
-    lastScopeKey.current = scopeKey;
+    if (itemsQuery.isPending) {
+      return;
+    }
+    if (itemsQuery.isPlaceholderData && !itemsQuery.error) {
+      return;
+    }
+    completeScopeNavigation();
+  }, [
+    completeScopeNavigation,
+    itemsQuery.error,
+    itemsQuery.isPending,
+    itemsQuery.isPlaceholderData,
+    pendingScope,
+    scope,
+  ]);
+
+  useEffect(() => {
+    if (itemsQuery.isPlaceholderData) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDisplayedScope((current) =>
+        sameScope(current, effectiveScope) ? current : effectiveScope,
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [effectiveScope, itemsQuery.isPlaceholderData]);
+
+  useEffect(() => {
+    if (openingId === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setOpeningId(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [openingId]);
+
+  useEffect(() => {
+    if (lastScopeKey.current === key) {
+      return;
+    }
+    lastScopeKey.current = key;
     setSelectedId(null);
+    setOpeningId(null);
     scrollToTop();
-  }, [scopeKey, scrollToTop]);
+  }, [key, scrollToTop]);
 
   useEffect(() => {
     if (items.length === 0 || itemsQuery.isPlaceholderData) {
       return;
     }
-    if (restoredScope.current === scopeKey) {
+    if (restoredScope.current === key) {
       return;
     }
-    restoredScope.current = scopeKey;
+    restoredScope.current = key;
 
     if (hashItemId === null || !items.some((item) => item.id === hashItemId)) {
       return;
@@ -118,15 +165,40 @@ export default function FeedsList() {
         .getElementById(`item-${hashItemId}`)
         ?.scrollIntoView({ block: "center" });
     });
-  }, [hashItemId, items, itemsQuery.isPlaceholderData, scopeKey]);
+  }, [hashItemId, items, itemsQuery.isPlaceholderData, key]);
+
+  const seedItem = useCallback(
+    (item: Item) => {
+      queryClient.setQueryData<Item>(
+        ["item", item.id],
+        (current) => current ?? item,
+      );
+    },
+    [queryClient],
+  );
+
+  const prepareItemOpen = useCallback(
+    (item: Item) => {
+      seedItem(item);
+      setOpeningId(item.id);
+    },
+    [seedItem],
+  );
 
   const openItem = useCallback(
     (item: Item) => {
-      setSelectedId(item.id);
-      router.push(articleHref(item, scope));
+      prepareItemOpen(item);
+      router.push(articleHref(item, effectiveScope));
     },
-    [router, scope],
+    [effectiveScope, prepareItemOpen, router],
   );
+
+  const retry = useCallback(() => {
+    if (pendingScope) {
+      navigateToScope(pendingScope);
+    }
+    void refetchItems();
+  }, [navigateToScope, pendingScope, refetchItems]);
 
   const moveSelection = useCallback(
     (step: number) => {
@@ -225,9 +297,19 @@ export default function FeedsList() {
       items={items}
       total={total}
       loading={loading}
+      busy={busy}
       heading={heading}
-      query={scope.query}
-      view={scope.view}
+      pending={pendingScope !== null}
+      pendingLabel={pendingLabel}
+      pendingSince={pendingSince}
+      showingPrevious={showingPrevious}
+      previousHeading={previousHeading}
+      error={itemsQuery.error}
+      onRetry={retry}
+      openingId={openingId}
+      scope={effectiveScope}
+      query={effectiveScope.query}
+      view={effectiveScope.view}
       hasFeeds={feeds.length > 0}
       hasFilters={hasFilters}
       feedNames={feedNames}
@@ -235,6 +317,8 @@ export default function FeedsList() {
       labels={labels}
       selectedId={selectedItemId}
       onOpen={openItem}
+      onOpening={prepareItemOpen}
+      onPrefetchItem={seedItem}
       onToggleStar={toggleStar}
       onToggleRead={toggleRead}
       onToggleLabel={toggleLabel}

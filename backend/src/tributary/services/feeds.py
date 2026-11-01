@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import Settings
-from ..db import session_scope, utcnow
+from ..db import end_transaction, session_scope, utcnow
 from ..models import Feed, Item
 from .jsonfeed import JsonFeedError, parse_json_feed
 from .text import (
@@ -283,6 +283,10 @@ def _fetch_feed(
             headers["If-None-Match"] = feed.etag
         if feed.last_modified:
             headers["If-Modified-Since"] = feed.last_modified
+
+    # Do not keep the read transaction open while the feed downloads; a slow
+    # feed can outlast Neon's idle-in-transaction limit.
+    end_transaction(session)
 
     try:
         download = download_url(client, url, headers=headers)

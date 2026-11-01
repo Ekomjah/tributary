@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings
-from ..db import utcnow
+from ..db import end_transaction, utcnow
 from ..models import Feed, Item, SearchCache
 from ..schemas import ItemOut
 from . import feeds, quotas
@@ -184,6 +184,11 @@ def run_search(
         cached = True
         _metric_count("search.cache_hits", {"engine": params.engine})
     else:
+        # The cache lookup above opened a transaction. End it before the quota
+        # write and the SerpAPI request: the request can take longer than Neon's
+        # idle-in-transaction limit, and its first statement after that would
+        # fail instead of running the search.
+        end_transaction(session)
         active_backend = make_backend(settings, backend)
         quotas.consume(
             session,

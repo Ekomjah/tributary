@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
+from ..db import end_transaction
 from ..models import Feed
 from ..schemas import (
     FeedAddOut,
@@ -50,6 +51,9 @@ def create_feed(
         raise HTTPException(status_code=409, detail="That feed is already subscribed")
 
     settings = request.app.state.settings
+    # The duplicate check above opened a transaction; do not hold it across the
+    # feed download.
+    end_transaction(db)
     try:
         with feeds.make_client(settings) as client:
             feed, result = feeds.add_feed(
@@ -142,6 +146,9 @@ def refresh_all(
         limit=settings.feed_refreshes_per_hour,
         settings=settings,
     )
+    # The refresh opens its own sessions per feed; release this request's
+    # transaction so it does not stay idle while the refresh runs.
+    end_transaction(db)
     results = feeds.refresh_feeds(
         request.app.state.session_factory,
         settings,

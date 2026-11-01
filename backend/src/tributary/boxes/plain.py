@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from ..db import end_transaction
 from ..models import Item
 from ..schemas import ItemOut
 from ..services import articles, feeds
@@ -61,6 +62,8 @@ class FetchBox:
                 )
             ).all()
             collected.extend(ItemOut.model_validate(item) for item in stored)
+            # Bound the transaction to one feed; a step can list several URLs.
+            end_transaction(context.session)
 
         if errors and not collected:
             raise BoxError("fetch failed for every URL: " + "; ".join(errors))
@@ -202,5 +205,8 @@ class FullTextBox:
             )
             context.session.flush()
             enriched.append(ItemOut.model_validate(row))
+            # Commit per item so a long article pass cannot leave one
+            # transaction open for the whole step.
+            end_transaction(context.session)
 
         return enriched

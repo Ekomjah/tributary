@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, TriangleAlert } from "lucide-react";
 
 import ArticleView from "@/components/article-view";
@@ -15,10 +15,10 @@ import {
   feedsHref,
   itemHash,
   itemIdFromSlug,
-  itemsQueryKey,
-  PAGE_SIZE,
+  itemsQueryOptions,
   scopeLabel,
 } from "@/lib/feeds";
+import type { Item } from "@/lib/types";
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -33,9 +33,11 @@ function errorMessage(error: unknown): string {
 function ArticleNotFound({
   backHref,
   message,
+  onBackIntent,
 }: {
   backHref: string;
   message: string;
+  onBackIntent: () => void;
 }) {
   return (
     <div className="mx-auto mt-16 max-w-md border border-line bg-sidebar px-6 py-8 text-center">
@@ -43,7 +45,9 @@ function ArticleNotFound({
       <h1 className="mt-3 text-[15px] font-bold">Article not found</h1>
       <p className="mt-1 text-[13px] leading-5 text-muted">{message}</p>
       <Button
-        render={<Link href={backHref} />}
+        render={
+          <Link href={backHref} scroll={false} onNavigate={onBackIntent} />
+        }
         variant="secondary"
         size="sm"
         className="mt-4"
@@ -54,10 +58,51 @@ function ArticleNotFound({
   );
 }
 
+function ArticleLoadError({
+  backHref,
+  message,
+  onRetry,
+  onBackIntent,
+}: {
+  backHref: string;
+  message: string;
+  onRetry: () => void;
+  onBackIntent: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="mx-auto mt-16 max-w-md border border-line bg-sidebar px-6 py-8 text-center"
+    >
+      <TriangleAlert className="mx-auto size-7 text-danger" aria-hidden="true" />
+      <h1 className="mt-3 text-[15px] font-bold">
+        Could not load this article
+      </h1>
+      <p className="mt-1 text-[13px] leading-5 text-muted">{message}</p>
+      <div className="mt-4 flex items-center justify-center gap-2">
+        <Button variant="secondary" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+        <Button
+          render={
+            <Link href={backHref} scroll={false} onNavigate={onBackIntent} />
+          }
+          variant="ghost"
+          size="sm"
+        >
+          Back to the list
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function FeedsArticle({ slug }: { slug: string }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const {
     scope,
+    beginScopeNavigation,
     feeds,
     labels,
     feedNames,
@@ -77,11 +122,20 @@ export default function FeedsArticle({ slug }: { slug: string }) {
 
   const itemId = itemIdFromSlug(slug);
   const ensured = useRef<Set<number>>(new Set());
+  const [pendingArticle, setPendingArticle] = useState<{
+    id: number;
+    title: string;
+  } | null>(null);
+  const pendingTitle =
+    pendingArticle && pendingArticle.id !== itemId
+      ? pendingArticle.title
+      : null;
 
   const itemQuery = useQuery({
     queryKey: ["item", itemId],
     enabled: itemId !== null,
     queryFn: ({ signal }) => api.getItem(itemId as number, signal),
+    staleTime: 0,
     retry: (failureCount, error) => {
       if (error instanceof ApiError && error.status === 404) {
         return false;
@@ -91,28 +145,28 @@ export default function FeedsArticle({ slug }: { slug: string }) {
   });
 
   const listQuery = useQuery({
-    queryKey: itemsQueryKey(scope),
+    ...itemsQueryOptions(scope),
     enabled: itemId !== null,
-    queryFn: ({ signal }) =>
-      api.listItems({
-        unread: scope.view === "unread" ? true : undefined,
-        starred: scope.view === "starred" ? true : undefined,
-        feedId: scope.feedId,
-        label: scope.label,
-        q: scope.query || undefined,
-        limit: PAGE_SIZE,
-        signal,
-      }),
   });
 
   const item = itemQuery.data ?? null;
   const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
   const contextLabel = scopeLabel(scope, feeds);
-  const backHref = itemId === null ? feedsHref(scope) : `${feedsHref(scope)}${itemHash(itemId)}`;
+  const backHref =
+    itemId === null ? feedsHref(scope) : `${feedsHref(scope)}${itemHash(itemId)}`;
 
   const goBack = useCallback(() => {
+    beginScopeNavigation(scope);
     router.push(backHref, { scroll: false });
-  }, [backHref, router]);
+  }, [backHref, beginScopeNavigation, router, scope]);
+
+  useEffect(() => {
+    if (pendingArticle === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setPendingArticle(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [pendingArticle]);
 
   useEffect(() => {
     if (listQuery.error) {
@@ -160,9 +214,16 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       if (nextIndex === currentIndex) {
         return;
       }
-      router.push(articleHref(items[nextIndex], scope));
+
+      const next = items[nextIndex];
+      queryClient.setQueryData<Item>(
+        ["item", next.id],
+        (current) => current ?? next,
+      );
+      setPendingArticle({ id: next.id, title: next.title || "Untitled" });
+      router.push(articleHref(next, scope));
     },
-    [item, items, router, scope],
+    [item, items, queryClient, router, scope, setPendingArticle],
   );
 
   useEffect(() => {
@@ -244,25 +305,47 @@ export default function FeedsArticle({ slug }: { slug: string }) {
 
   if (itemQuery.isPending) {
     return (
-      <div className="flex items-center gap-2 px-6 py-5 text-[12px] text-muted">
-        <Loader2
-          className="size-3.5 animate-spin motion-reduce:animate-none"
-          aria-hidden="true"
-        />
-        Loading article…
+      <div className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4">
+        <div className="flex items-center justify-between gap-3 border-b border-divider pb-2">
+          <Link
+            href={backHref}
+            className="text-[12px] text-accent hover:underline"
+          >
+            ← Back to {contextLabel}
+          </Link>
+        </div>
+        <div className="mt-6 flex items-center gap-2 text-[12px] text-muted">
+          <Loader2
+            className="size-3.5 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+          Loading article…
+        </div>
       </div>
     );
   }
 
-  if (itemQuery.error || !item) {
+  if (!item) {
+    if (itemQuery.error instanceof ApiError && itemQuery.error.status === 404) {
+      return (
+        <ArticleNotFound
+          backHref={backHref}
+          message="This article is no longer in the reader."
+        />
+      );
+    }
+
     return (
-      <ArticleNotFound
+      <ArticleLoadError
         backHref={backHref}
         message={
           itemQuery.error
             ? errorMessage(itemQuery.error)
             : "The address does not point at an article in this reader."
         }
+        onRetry={() => {
+          void itemQuery.refetch();
+        }}
       />
     );
   }
@@ -275,6 +358,8 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       labels={labels}
       contextLabel={contextLabel}
       fetching={fetchingIds.has(item.id)}
+      pendingTitle={pendingTitle}
+      focusItemId={pendingArticle?.id ?? null}
       onBack={goBack}
       onToggleStar={toggleStar}
       onToggleRead={toggleRead}

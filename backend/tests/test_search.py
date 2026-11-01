@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -55,13 +56,17 @@ class FakeBackend:
         payload: dict[str, Any] | None = None,
         *,
         error: Exception | None = None,
+        probe: Callable[[], None] | None = None,
     ) -> None:
         self.payload = payload or {}
         self.error = error
+        self.probe = probe
         self.calls: list[dict[str, Any]] = []
 
     def search(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
+        if self.probe is not None:
+            self.probe()
         if self.error is not None:
             raise self.error
         return self.payload
@@ -110,6 +115,25 @@ def test_search_without_a_key_fails_with_an_actionable_message() -> None:
         web_search.make_backend(settings)
 
     assert info.value.status_code == 503
+
+
+def test_run_search_releases_the_transaction_before_the_backend_call(
+    db_session: Session,
+    settings: Settings,
+    local_user: User,
+) -> None:
+    in_transaction: list[bool] = []
+    backend = FakeBackend(
+        NEWS_PAYLOAD,
+        probe=lambda: in_transaction.append(db_session.in_transaction()),
+    )
+    params = web_search.make_params(settings, "AI regulation")
+
+    web_search.run_search(
+        db_session, settings, params, owner_id=local_user.id, backend=backend
+    )
+
+    assert in_transaction == [False]
 
 
 def test_run_search_persists_a_virtual_feed_and_items(

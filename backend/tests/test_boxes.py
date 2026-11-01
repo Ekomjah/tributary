@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tributary.boxes import (
+    PipeRunError,
     PipeSpec,
     PipeSpecError,
     RunContext,
@@ -339,3 +341,81 @@ def test_run_pipe_applies_steps_in_order(
     assert [step.box for step in result.steps] == ["merge", "filter", "sort", "limit"]
     assert result.steps[-1].items_in == 2
     assert result.steps[-1].items_out == 1
+
+
+def test_run_pipe_commits_between_steps(
+    settings: Settings,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[bool] = []
+    original = LimitBox.run
+
+    def probe(self, items, context):  # noqa: ANN001
+        seen.append(context.session.in_transaction())
+        context.session.execute(select(1))
+        return original(self, items, context)
+
+    monkeypatch.setattr(LimitBox, "run", probe)
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200))
+    )
+    context = RunContext(
+        session=db_session,
+        settings=settings,
+        client=client,
+        owner_id=1,
+    )
+    spec = PipeSpec.model_validate(
+        {
+            "name": "Two limits",
+            "steps": [{"box": "limit", "count": 1}, {"box": "limit", "count": 1}],
+        }
+    )
+
+    try:
+        run_pipe(spec, context)
+    finally:
+        client.close()
+
+    assert seen == [False, False]
+
+
+def test_run_pipe_stops_when_the_time_budget_is_spent(
+    settings: Settings,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings.pipe_run_timeout = 0.01
+    original = LimitBox.run
+
+    def slow(self, items, context):  # noqa: ANN001
+        time.sleep(0.05)
+        return original(self, items, context)
+
+    monkeypatch.setattr(LimitBox, "run", slow)
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200))
+    )
+    context = RunContext(
+        session=db_session,
+        settings=settings,
+        client=client,
+        owner_id=1,
+    )
+    spec = PipeSpec.model_validate(
+        {
+            "name": "Slow",
+            "steps": [{"box": "limit", "count": 1}, {"box": "limit", "count": 1}],
+        }
+    )
+
+    try:
+        with pytest.raises(PipeRunError) as info:
+            run_pipe(spec, context)
+    finally:
+        client.close()
+
+    assert info.value.box == "limit"
+    assert "time budget" in str(info.value)
+    assert [step.box for step in info.value.steps] == ["limit", "limit"]

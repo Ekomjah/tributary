@@ -3,6 +3,7 @@ import {
   Inbox,
   Info,
   Library,
+  Loader2,
   Lock,
   Plus,
   Rss,
@@ -15,6 +16,12 @@ import {
 import type { ComponentType, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import HoverPrefetchLink from "@/components/ui/hover-prefetch-link";
+import {
+  feedsHref,
+  sameScopeLocation,
+  type FeedsScope,
+} from "@/lib/feeds";
 import type { Feed, ItemView, Label } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -36,9 +43,10 @@ interface SidebarProps {
   feedId: number | null;
   label: string | null;
   viewCounts: Record<ItemView, number>;
-  onSelectView: (view: ItemView) => void;
-  onSelectFeed: (feedId: number | null) => void;
-  onSelectLabel: (name: string) => void;
+  pendingScope: FeedsScope | null;
+  onBeginNavigate: (scope: FeedsScope) => void;
+  onPrefetchScope: (scope: FeedsScope) => void;
+  onNavigated?: () => void;
   onAddFeed: () => void;
   onAddLabel: () => void;
   onDeleteFeed: (feed: Feed) => void;
@@ -46,33 +54,42 @@ interface SidebarProps {
 
 function Row({
   active,
+  pending,
+  href,
   icon: Icon,
   children,
   count,
-  onClick,
+  onNavigate,
+  onIntent,
   title,
   onDelete,
   deleteLabel,
 }: {
   active: boolean;
+  pending: boolean;
+  href: string;
   icon: ComponentType<{ className?: string }>;
   children: ReactNode;
   count?: number;
-  onClick: () => void;
+  onNavigate: () => void;
+  onIntent: () => void;
   title?: string;
   onDelete?: () => void;
   deleteLabel?: string;
 }) {
   return (
     <div className="group relative w-full">
-      <Button
-        type="button"
-        variant="ghost"
+      <HoverPrefetchLink
+        href={href}
+        scroll={false}
+        prefetch={false}
         title={title}
         aria-current={active ? "page" : undefined}
-        onClick={onClick}
+        aria-busy={pending || undefined}
+        onNavigate={onNavigate}
+        onIntent={onIntent}
         className={cn(
-          "h-7 w-full justify-start gap-2 rounded-none border-l-[3px] px-2 text-left text-[13px] font-normal",
+          "flex h-7 w-full items-center gap-2 rounded-none border-l-[3px] px-2 text-left text-[13px] font-normal text-ink hover:no-underline active:bg-accent-bg",
           active
             ? "border-accent bg-accent-bg font-bold text-ink"
             : "border-transparent hover:bg-[#f0f0f0]",
@@ -86,12 +103,23 @@ function Row({
           )}
         />
         <span className="min-w-0 flex-1 truncate">{children}</span>
-        {typeof count === "number" && count > 0 && (
+        {pending ? (
+          <span
+            className="inline-flex shrink-0 items-center text-muted"
+            title="Loading"
+          >
+            <Loader2
+              className="size-3 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            <span className="sr-only">Loading</span>
+          </span>
+        ) : typeof count === "number" && count > 0 ? (
           <span className="shrink-0 font-mono text-[11px] font-normal text-faint">
             ({count})
           </span>
-        )}
-      </Button>
+        ) : null}
+      </HoverPrefetchLink>
       {onDelete && (
         <Button
           type="button"
@@ -134,9 +162,10 @@ export default function Sidebar({
   feedId,
   label,
   viewCounts,
-  onSelectView,
-  onSelectFeed,
-  onSelectLabel,
+  pendingScope,
+  onBeginNavigate,
+  onPrefetchScope,
+  onNavigated,
   onAddFeed,
   onAddLabel,
   onDeleteFeed,
@@ -145,21 +174,42 @@ export default function Sidebar({
   const pipeFeeds = feeds.filter((feed) => feed.kind === "pipe");
   const searches = feeds.filter((feed) => feed.kind === "search");
 
+  function rowFor(target: FeedsScope) {
+    return {
+      href: feedsHref(target),
+      pending:
+        pendingScope !== null && sameScopeLocation(pendingScope, target),
+      onNavigate: () => {
+        onBeginNavigate(target);
+        onNavigated?.();
+      },
+      onIntent: () => onPrefetchScope(target),
+    };
+  }
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex-1 overflow-y-auto py-3">
         <nav aria-label="Views" className="flex flex-col">
-          {VIEWS.map((entry) => (
-            <Row
-              key={entry.id}
-              active={view === entry.id && feedId === null && label === null}
-              icon={entry.icon}
-              count={viewCounts[entry.id]}
-              onClick={() => onSelectView(entry.id)}
-            >
-              {entry.label}
-            </Row>
-          ))}
+          {VIEWS.map((entry) => {
+            const target: FeedsScope = {
+              view: entry.id,
+              feedId: null,
+              label: null,
+              query: "",
+            };
+            return (
+              <Row
+                key={entry.id}
+                {...rowFor(target)}
+                active={view === entry.id && feedId === null && label === null}
+                icon={entry.icon}
+                count={viewCounts[entry.id]}
+              >
+                {entry.label}
+              </Row>
+            );
+          })}
         </nav>
 
         <div className="my-2 border-t border-divider" />
@@ -208,20 +258,28 @@ export default function Sidebar({
             {subscriptions.length === 0 ? (
               <p className="px-2 py-1 text-[12px] text-faint">No feeds yet.</p>
             ) : (
-              subscriptions.map((feed) => (
-                <Row
-                  key={feed.id}
-                  active={feedId === feed.id}
-                  icon={Rss}
-                  count={feedCounts[feed.id] ?? 0}
-                  title={feed.url}
-                  onClick={() => onSelectFeed(feed.id)}
-                  onDelete={() => onDeleteFeed(feed)}
-                  deleteLabel={`Delete ${feed.title || feed.url}`}
-                >
-                  {feed.title || feed.url}
-                </Row>
-              ))
+              subscriptions.map((feed) => {
+                const target: FeedsScope = {
+                  view: "all",
+                  feedId: feed.id,
+                  label: null,
+                  query: "",
+                };
+                return (
+                  <Row
+                    key={feed.id}
+                    {...rowFor(target)}
+                    active={feedId === feed.id}
+                    icon={Rss}
+                    count={feedCounts[feed.id] ?? 0}
+                    title={feed.url}
+                    onDelete={() => onDeleteFeed(feed)}
+                    deleteLabel={`Delete ${feed.title || feed.url}`}
+                  >
+                    {feed.title || feed.url}
+                  </Row>
+                );
+              })
             )}
           </div>
         </section>
@@ -239,20 +297,28 @@ export default function Sidebar({
                 Add one from a pipe.
               </p>
             ) : (
-              pipeFeeds.map((feed) => (
-                <Row
-                  key={feed.id}
-                  active={feedId === feed.id}
-                  icon={Workflow}
-                  count={feedCounts[feed.id] ?? 0}
-                  title={feed.url}
-                  onClick={() => onSelectFeed(feed.id)}
-                  onDelete={() => onDeleteFeed(feed)}
-                  deleteLabel={`Remove ${feed.title || feed.url} from the reader`}
-                >
-                  {feed.title || "Pipe feed"}
-                </Row>
-              ))
+              pipeFeeds.map((feed) => {
+                const target: FeedsScope = {
+                  view: "all",
+                  feedId: feed.id,
+                  label: null,
+                  query: "",
+                };
+                return (
+                  <Row
+                    key={feed.id}
+                    {...rowFor(target)}
+                    active={feedId === feed.id}
+                    icon={Workflow}
+                    count={feedCounts[feed.id] ?? 0}
+                    title={feed.url}
+                    onDelete={() => onDeleteFeed(feed)}
+                    deleteLabel={`Remove ${feed.title || feed.url} from the reader`}
+                  >
+                    {feed.title || "Pipe feed"}
+                  </Row>
+                );
+              })
             )}
           </div>
         </section>
@@ -270,18 +336,26 @@ export default function Sidebar({
                 No searches yet.
               </p>
             ) : (
-              searches.map((feed) => (
-                <Row
-                  key={feed.id}
-                  active={feedId === feed.id}
-                  icon={Search}
-                  count={feedCounts[feed.id] ?? 0}
-                  title={feed.url}
-                  onClick={() => onSelectFeed(feed.id)}
-                >
-                  {feed.title || "Search"}
-                </Row>
-              ))
+              searches.map((feed) => {
+                const target: FeedsScope = {
+                  view: "all",
+                  feedId: feed.id,
+                  label: null,
+                  query: "",
+                };
+                return (
+                  <Row
+                    key={feed.id}
+                    {...rowFor(target)}
+                    active={feedId === feed.id}
+                    icon={Search}
+                    count={feedCounts[feed.id] ?? 0}
+                    title={feed.url}
+                  >
+                    {feed.title || "Search"}
+                  </Row>
+                );
+              })
             )}
           </div>
         </section>
@@ -310,16 +384,24 @@ export default function Sidebar({
             {labels.length === 0 ? (
               <p className="px-2 py-1 text-[12px] text-faint">No labels yet.</p>
             ) : (
-              labels.map((entry) => (
-                <Row
-                  key={entry.id}
-                  active={label === entry.name}
-                  icon={Tag}
-                  onClick={() => onSelectLabel(entry.name)}
-                >
-                  {entry.name}
-                </Row>
-              ))
+              labels.map((entry) => {
+                const target: FeedsScope = {
+                  view: "all",
+                  feedId: null,
+                  label: entry.name,
+                  query: "",
+                };
+                return (
+                  <Row
+                    key={entry.id}
+                    {...rowFor(target)}
+                    active={label === entry.name}
+                    icon={Tag}
+                  >
+                    {entry.name}
+                  </Row>
+                );
+              })
             )}
           </div>
         </section>

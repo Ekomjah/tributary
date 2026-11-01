@@ -4,11 +4,12 @@ import time
 
 import httpx
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tributary.boxes import plain
 from tributary.db import ensure_local_user
-from tributary.models import Pipe, Run
+from tributary.models import Item, Pipe, Run
 from tributary.services import feeds, pipe_runs
 
 RSS = """<?xml version="1.0" encoding="utf-8"?>
@@ -221,3 +222,32 @@ def test_app_startup_reaps_runs_left_by_a_previous_process(
 
     assert body["status"] == "error"
     assert "interrupted" in body["error"]
+
+
+def test_completed_steps_are_kept_after_a_later_failure(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch,
+) -> None:
+    pipe = create_pipe(
+        client,
+        [
+            {"box": "fetch", "urls": [FEED_URL]},
+            {"box": "limit", "count": 2},
+        ],
+    )
+    monkeypatch.setattr(feeds, "make_client", lambda settings: mock_client(rss_handler))
+
+    def boom(self, items, context):  # noqa: ANN001
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(plain.LimitBox, "run", boom)
+
+    response = client.post(f"/api/pipes/{pipe['id']}/runs")
+    run = wait_for_run(client, response.json()["id"])
+
+    assert run["status"] == "error"
+    assert run["error_box"] == "limit"
+
+    with session_factory() as fresh:
+        assert fresh.scalar(select(func.count()).select_from(Item)) == 2

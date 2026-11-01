@@ -1,16 +1,25 @@
 import {
   Circle,
   CircleCheck,
+  Clock,
   ExternalLink,
   Loader2,
   Plus,
   Rss,
   Star,
   Tag,
+  TriangleAlert,
 } from "lucide-react";
 
 import LabelMenu from "@/components/label-menu";
+import {
+  formatElapsed,
+  useDelayedFlag,
+  useElapsedSince,
+} from "@/components/feeds/use-slow-loading";
 import { Button } from "@/components/ui/button";
+import HoverPrefetchLink from "@/components/ui/hover-prefetch-link";
+import { articleHref, type FeedsScope } from "@/lib/feeds";
 import { excerpt, formatRelative } from "@/lib/text";
 import type { Item, ItemView, Label } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -19,7 +28,17 @@ interface ArticleListProps {
   items: Item[];
   total: number;
   loading: boolean;
+  busy: boolean;
   heading: string;
+  pending: boolean;
+  pendingLabel: string;
+  pendingSince: number | null;
+  showingPrevious: boolean;
+  previousHeading: string;
+  error: Error | null;
+  onRetry: () => void;
+  openingId: number | null;
+  scope: FeedsScope;
   query: string;
   view: ItemView;
   hasFeeds: boolean;
@@ -29,6 +48,8 @@ interface ArticleListProps {
   labels: Label[];
   selectedId: number | null;
   onOpen: (item: Item) => void;
+  onOpening: (item: Item) => void;
+  onPrefetchItem: (item: Item) => void;
   onToggleStar: (item: Item) => void;
   onToggleRead: (item: Item) => void;
   onToggleLabel: (item: Item, label: Label) => void;
@@ -36,6 +57,131 @@ interface ArticleListProps {
   onSelectView: (view: ItemView) => void;
   onAddFeed: () => void;
   onClearSearch: () => void;
+}
+
+function errorMessage(error: Error): string {
+  return error.message || "Could not load these items.";
+}
+
+function PendingStatus({
+  label,
+  since,
+  showingPrevious,
+  previousHeading,
+  onRetry,
+}: {
+  label: string;
+  since: number | null;
+  showingPrevious: boolean;
+  previousHeading: string;
+  onRetry: () => void;
+}) {
+  const showSpinner = useDelayedFlag(true, 120);
+  const slow = useDelayedFlag(true, 1500);
+  const elapsed = useElapsedSince(since);
+  const showRetry = elapsed >= 8000;
+
+  if (!showSpinner && !slow) {
+    return null;
+  }
+
+  return (
+    <div className="flex max-w-[280px] flex-col items-end gap-0.5 text-right text-[11px] leading-4 text-muted">
+      <span className="inline-flex items-center gap-1.5">
+        {slow ? (
+          <Clock className="size-3.5 text-warn" aria-hidden="true" />
+        ) : showSpinner ? (
+          <Loader2
+            className="size-3.5 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : null}
+        <span>
+          {slow
+            ? `Still loading · ${formatElapsed(elapsed)}`
+            : `Loading ${label}…`}
+        </span>
+        {showRetry && (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-4 px-1 text-[11px]"
+            onClick={onRetry}
+          >
+            Retry
+          </Button>
+        )}
+      </span>
+      {showingPrevious && (
+        <span className="text-[11px] text-faint">
+          Still showing {previousHeading}.
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ErrorStatus({
+  error,
+  onRetry,
+}: {
+  error: Error;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex max-w-[320px] items-start gap-1.5 text-right text-[11px] leading-4 text-danger"
+    >
+      <TriangleAlert
+        className="mt-0.5 size-3.5 shrink-0"
+        aria-hidden="true"
+      />
+      <span className="min-w-0 flex-1">{errorMessage(error)}</span>
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        className="h-4 shrink-0 px-1 text-[11px]"
+        onClick={onRetry}
+      >
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+function ErrorState({
+  error,
+  onRetry,
+}: {
+  error: Error;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex min-h-72 flex-col items-center justify-center px-6 text-center"
+    >
+      <TriangleAlert className="size-6 text-danger" aria-hidden="true" />
+      <p className="mt-3 text-[15px] font-bold text-ink">
+        Could not load these items
+      </p>
+      <p className="mt-1 max-w-sm text-[13px] leading-5 text-muted">
+        {errorMessage(error)}
+      </p>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="mt-4"
+        onClick={onRetry}
+      >
+        Retry
+      </Button>
+    </div>
+  );
 }
 
 function EmptyState({
@@ -166,7 +312,17 @@ export default function ArticleList({
   items,
   total,
   loading,
+  busy,
   heading,
+  pending,
+  pendingLabel,
+  pendingSince,
+  showingPrevious,
+  previousHeading,
+  error,
+  onRetry,
+  openingId,
+  scope,
   query,
   view,
   hasFeeds,
@@ -176,6 +332,8 @@ export default function ArticleList({
   labels,
   selectedId,
   onOpen,
+  onOpening,
+  onPrefetchItem,
   onToggleStar,
   onToggleRead,
   onToggleLabel,
@@ -184,24 +342,52 @@ export default function ArticleList({
   onAddFeed,
   onClearSearch,
 }: ArticleListProps) {
+  const slow = useDelayedFlag(pending, 1500);
+
   return (
-    <div className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4">
-      <div className="flex min-h-8 items-baseline justify-between gap-3 border-b border-divider pb-3">
-        <h1 className="text-[20px] font-bold leading-tight text-ink">
+    <div
+      className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4"
+      aria-busy={busy || undefined}
+    >
+      <p className="sr-only" role="status" aria-live="polite">
+        {pending && !error
+          ? slow
+            ? `Still loading ${pendingLabel}.`
+            : `Loading ${pendingLabel}.`
+          : ""}
+      </p>
+
+      <div className="flex min-h-8 items-start justify-between gap-3 border-b border-divider pb-3">
+        <h1 className="min-w-0 text-[20px] font-bold leading-tight text-ink">
           {heading}{" "}
-          {!loading && (
+          {!pending && !loading && !(error && items.length === 0) && (
             <span className="font-normal text-faint">({total})</span>
           )}
         </h1>
-        {loading && (
+        {error ? (
+          <ErrorStatus error={error} onRetry={onRetry} />
+        ) : pending ? (
+          <PendingStatus
+            label={pendingLabel}
+            since={pendingSince}
+            showingPrevious={showingPrevious}
+            previousHeading={previousHeading}
+            onRetry={onRetry}
+          />
+        ) : loading ? (
           <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            <Loader2
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
             Loading…
           </span>
-        )}
+        ) : null}
       </div>
 
-      {loading && items.length === 0 ? (
+      {error && items.length === 0 ? (
+        <ErrorState error={error} onRetry={onRetry} />
+      ) : loading && items.length === 0 ? (
         <div className="divide-y divide-divider" aria-hidden="true">
           {[0, 1, 2, 3, 4].map((row) => (
             <div className="py-4" key={row}>
@@ -225,13 +411,15 @@ export default function ArticleList({
         <div className="divide-y divide-divider">
           {items.map((item) => {
             const preview = item.summary ?? excerpt(item.content, 190);
-            const selected = selectedId === item.id;
+            const opening = openingId === item.id;
+            const selected = selectedId === item.id || opening;
 
             return (
               <article
                 key={item.id}
                 id={`item-${item.id}`}
                 onClick={() => onOpen(item)}
+                aria-busy={opening || undefined}
                 className={cn(
                   "group cursor-pointer border-l-[3px] py-4 pl-3 pr-1 transition-colors duration-100 hover:bg-[#fafafa]",
                   selected
@@ -241,19 +429,21 @@ export default function ArticleList({
               >
                 <div className="flex items-start gap-3">
                   <h2 className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpen(item);
-                      }}
+                    <HoverPrefetchLink
+                      href={articleHref(item, scope)}
+                      scroll={false}
+                      prefetch={false}
+                      prefetchOnIntent
+                      onIntent={() => onPrefetchItem(item)}
+                      onNavigate={() => onOpening(item)}
+                      onClick={(event) => event.stopPropagation()}
                       className={cn(
                         "block w-full truncate text-left text-[15px] font-bold leading-snug hover:underline",
                         item.is_read ? "text-muted" : "text-accent",
                       )}
                     >
                       {item.title || "Untitled"}
-                    </button>
+                    </HoverPrefetchLink>
                   </h2>
 
                   <div
@@ -358,6 +548,21 @@ export default function ArticleList({
                   <time dateTime={item.published ?? item.fetched_at}>
                     {formatRelative(item.published ?? item.fetched_at)}
                   </time>
+                  {opening && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span
+                        role="status"
+                        className="inline-flex items-center gap-1 text-muted"
+                      >
+                        <Loader2
+                          className="size-3 animate-spin motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                        Opening…
+                      </span>
+                    </>
+                  )}
                   {item.labels.length > 0 && (
                     <>
                       <span aria-hidden="true">·</span>

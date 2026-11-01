@@ -135,7 +135,7 @@ def test_ollama_cloud_uses_cloud_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     settings = Settings(_env_file=None)
 
     assert settings.ollama_cloud is True
-    assert settings.active_ollama_model == "gemma4:3b"
+    assert settings.active_ollama_model == "gemma4:31b-cloud"
     assert settings.active_ollama_host == "https://ollama.com"
     assert settings.ollama_auth_headers == {
         "Authorization": "Bearer cloud-key"
@@ -188,7 +188,7 @@ def test_local_ollama_values_do_not_override_cloud_defaults() -> None:
         ollama_host="http://local:11434",
     )
 
-    assert settings.active_ollama_model == "gemma4:3b"
+    assert settings.active_ollama_model == "gemma4:31b-cloud"
     assert settings.active_ollama_host == "https://ollama.com"
 
 

@@ -387,7 +387,13 @@ def test_export_skips_unlabelled_items_by_default(
 
 
 def test_doctor_reports_a_healthy_setup(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SENTRY_ENABLED", "false")
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=False,
+        ollama_model="gemma3:1b",
+        sentry_enabled=False,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
     monkeypatch.setattr(
         "tributary.cli.model.check_ollama",
         lambda settings: (True, "reachable at test", ["gemma3:1b"]),
@@ -404,7 +410,13 @@ def test_doctor_warns_when_the_model_is_missing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SENTRY_ENABLED", "false")
+    settings = Settings(
+        _env_file=None,
+        ollama_cloud=False,
+        ollama_model="gemma3:1b",
+        sentry_enabled=False,
+    )
+    monkeypatch.setattr("tributary.cli.get_settings", lambda: settings)
     monkeypatch.setattr(
         "tributary.cli.model.check_ollama",
         lambda settings: (True, "reachable at test", ["another-model:1b"]),
@@ -447,7 +459,7 @@ def test_doctor_reports_cloud_ollama_mode(tmp_path: Path, monkeypatch) -> None:
         lambda settings: (
             True,
             "reachable at https://ollama.com",
-            ["gemma4:3b"],
+            ["gemma4:31b"],
         ),
     )
 
@@ -455,7 +467,7 @@ def test_doctor_reports_cloud_ollama_mode(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "OK    ollama cloud" in result.output
-    assert "gemma4:3b" in result.output
+    assert "gemma4:31b-cloud" in result.output
     assert "ollama pull" not in result.output
 
 

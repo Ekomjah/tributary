@@ -237,6 +237,46 @@ def test_ollama_client_parses_json_and_hides_prompts() -> None:
     assert result == {"summary": "Hello."}
 
 
+def test_ollama_client_parses_fenced_json() -> None:
+    client = OllamaModelClient(model="gemma4:31b-cloud", host="https://ollama.com", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(
+            message=SimpleNamespace(
+                content='```json\n{"summary": "Hello from the cloud."}\n```'
+            )
+        )
+    )
+
+    result = client.generate_json("article text", schema={"type": "object"})
+
+    assert result == {"summary": "Hello from the cloud."}
+
+
+def test_ollama_client_parses_json_surrounded_by_prose() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(
+            message=SimpleNamespace(
+                content='Here is the object:\n{"keep": true}\nHope that helps.'
+            )
+        )
+    )
+
+    result = client.generate_json("article text", schema={"type": "object"})
+
+    assert result == {"keep": True}
+
+
+def test_ollama_client_rejects_a_non_object_json_value() -> None:
+    client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
+    client._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=lambda **kwargs: SimpleNamespace(message=SimpleNamespace(content="[1, 2]"))
+    )
+
+    with pytest.raises(ModelError, match="JSON object"):
+        client.generate_json("text", schema={"type": "object"})
+
+
 def test_ollama_client_reports_bad_json() -> None:
     client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
     client._client = SimpleNamespace(  # type: ignore[assignment]
@@ -420,7 +460,7 @@ def test_ollama_client_uses_cloud_settings_and_auth_header(monkeypatch) -> None:
 
     client = OllamaModelClient.from_settings(settings)
 
-    assert client.model == "gemma4:3b"
+    assert client.model == "gemma4:31b-cloud"
     assert client.host == "https://ollama.com"
     assert captured["host"] == "https://ollama.com"
     assert captured["headers"] == {"Authorization": "Bearer cloud-key"}
@@ -463,7 +503,7 @@ def test_check_ollama_uses_cloud_auth_and_host(monkeypatch) -> None:
 
         def list(self) -> SimpleNamespace:
             return SimpleNamespace(
-                models=[SimpleNamespace(model="gemma4:3b")]
+                models=[SimpleNamespace(model="gemma4:31b")]
             )
 
     monkeypatch.setattr(model_service.ollama, "Client", FakeClient)
@@ -472,7 +512,7 @@ def test_check_ollama_uses_cloud_auth_and_host(monkeypatch) -> None:
 
     assert reachable is True
     assert detail == "reachable at https://ollama.com"
-    assert names == ["gemma4:3b"]
+    assert names == ["gemma4:31b"]
     assert captured["host"] == "https://ollama.com"
     assert captured["headers"] == {"Authorization": "Bearer cloud-key"}
 

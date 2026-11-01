@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OLLAMA_API_KEY", "TRIBUTARY_OLLAMA_API_KEY"),
     )
     ollama_cloud_model: str = Field(
-        default="gemma4:3b",
+        default="gemma4:31b-cloud",
         validation_alias=AliasChoices(
             "OLLAMA_CLOUD_MODEL",
             "TRIBUTARY_OLLAMA_CLOUD_MODEL",
@@ -191,6 +191,16 @@ class Settings(BaseSettings):
             "PIPE_RUNS_PER_HOUR",
         ),
     )
+    # A run stops before starting another step once this budget is spent. The
+    # budget bounds the whole run; it cannot interrupt a step already in flight.
+    pipe_run_timeout: float = Field(
+        default=900.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_PIPE_RUN_TIMEOUT",
+            "PIPE_RUN_TIMEOUT",
+        ),
+    )
     searches_per_hour: int = Field(
         default=3,
         ge=1,
@@ -226,6 +236,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "TRIBUTARY_ARTICLE_DELAY",
             "ARTICLE_DELAY",
+        ),
+    )
+    # A pipe run can wait for another fetch of the same host. Bound that wait so
+    # a stuck request cannot keep a database transaction open indefinitely.
+    article_lock_timeout: float = Field(
+        default=30.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_LOCK_TIMEOUT",
+            "ARTICLE_LOCK_TIMEOUT",
         ),
     )
     article_min_chars: int = Field(

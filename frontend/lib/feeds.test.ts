@@ -6,8 +6,13 @@ import {
   feedsHref,
   itemIdFromHash,
   itemIdFromSlug,
+  itemsQueryOptions,
   readScope,
+  sameScope,
+  sameScopeLocation,
   scopeAfterFeedDelete,
+  scopeDescription,
+  scopeKey,
   scopeLabel,
 } from "./feeds";
 import type { Feed } from "./types";
@@ -154,5 +159,78 @@ describe("item hashes", () => {
   it("round-trips an item id", () => {
     expect(itemIdFromHash("#item-42")).toBe(42);
     expect(itemIdFromHash("#inbox")).toBeNull();
+  });
+});
+
+describe("scope comparison", () => {
+  it("treats every part of the scope as significant", () => {
+    const base = { view: "all", feedId: 3, label: null, query: "" } as const;
+    expect(sameScope(base, { ...base })).toBe(true);
+    expect(sameScope(base, { ...base, query: "sqlite" })).toBe(false);
+    expect(sameScope(base, { ...base, feedId: null })).toBe(false);
+  });
+
+  it("ignores search when comparing what a sidebar row points at", () => {
+    expect(
+      sameScopeLocation(
+        { view: "all", feedId: null, label: null, query: "sqlite" },
+        { view: "all", feedId: null, label: null, query: "" },
+      ),
+    ).toBe(true);
+  });
+
+  it("builds a stable key for the whole scope", () => {
+    expect(
+      scopeKey({ view: "unread", feedId: 3, label: null, query: "sqlite" }),
+    ).toBe("unread|3||sqlite");
+  });
+
+  it("shares the query key between the list and prefetching", () => {
+    expect(
+      itemsQueryOptions({
+        view: "unread",
+        feedId: 3,
+        label: null,
+        query: "sqlite",
+      }).queryKey,
+    ).toEqual(["items", "unread", 3, null, "sqlite"]);
+  });
+});
+
+describe("scopeDescription", () => {
+  it("names a view", () => {
+    expect(
+      scopeDescription(
+        { view: "unread", feedId: null, label: null, query: "" },
+        FEEDS,
+      ),
+    ).toBe("Unread");
+  });
+
+  it("names a feed", () => {
+    expect(
+      scopeDescription(
+        { view: "all", feedId: 3, label: null, query: "" },
+        FEEDS,
+      ),
+    ).toBe("“Example”");
+  });
+
+  it("names a search first", () => {
+    expect(
+      scopeDescription(
+        { view: "all", feedId: null, label: null, query: "sqlite" },
+        FEEDS,
+      ),
+    ).toBe("results for “sqlite”");
+  });
+
+  it("names a label", () => {
+    expect(
+      scopeDescription(
+        { view: "all", feedId: null, label: "AI", query: "" },
+        FEEDS,
+      ),
+    ).toBe("label “AI”");
   });
 });

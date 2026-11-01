@@ -346,6 +346,21 @@ def _init_db(engine: Engine) -> None:
     _legacy_sqlite_tables(engine, tables)
 
 
+def end_transaction(session: Session) -> None:
+    """Release the connection so no transaction spans network I/O.
+
+    Neon closes backends that stay idle in a transaction for five minutes. A
+    pipe step that fetches a feed, an article, a search result or a model answer
+    can take long enough to hit that limit while its session still holds a
+    transaction open, so callers commit before handing control to the network.
+    ``expire_on_commit`` is off in the session factories, so loaded rows stay
+    usable afterwards.
+    """
+
+    if session.in_transaction():
+        session.commit()
+
+
 @contextmanager
 def session_scope(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     session = session_factory()

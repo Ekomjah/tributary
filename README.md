@@ -63,7 +63,7 @@ uv run tributary doctor
 ```
 
 For Ollama Cloud instead, set `OLLAMA_CLOUD=true` and `OLLAMA_API_KEY` in
-`.env.local`. Cloud mode uses `gemma4:3b` at `https://ollama.com` and does not
+`.env.local`. Cloud mode uses `gemma4:31b-cloud` at `https://ollama.com` and does not
 need a local model pull. `OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` override
 those defaults.
 
@@ -148,7 +148,7 @@ reader does not use `.env.local`; set `NEXT_PUBLIC_API_BASE` in
 ### Ollama modes
 
 Local Ollama is the default. Set `OLLAMA_CLOUD=true` and `OLLAMA_API_KEY` to
-send AI calls to Ollama Cloud at `https://ollama.com` with `gemma4:3b`.
+send AI calls to Ollama Cloud at `https://ollama.com` with `gemma4:31b-cloud`.
 `OLLAMA_MODEL` and `OLLAMA_HOST` apply only to local mode; use
 `OLLAMA_CLOUD_MODEL` and `OLLAMA_CLOUD_HOST` to change the cloud defaults. If
 your account exposes the model under a different tag, set
@@ -191,7 +191,7 @@ PostgreSQL pool sizing and idle-connection recovery are controlled by
 | `DATABASE_CONNECT_TIMEOUT`       | Seconds before a PostgreSQL connect attempt fails                | `10`                     |
 | `OLLAMA_CLOUD`                   | Use Ollama Cloud instead of the local Ollama server              | `false`                  |
 | `OLLAMA_API_KEY`                 | Ollama Cloud API key; required when `OLLAMA_CLOUD=true`          | unset                    |
-| `OLLAMA_CLOUD_MODEL`             | Model used in cloud mode                                         | `gemma4:3b`              |
+| `OLLAMA_CLOUD_MODEL`             | Model used in cloud mode                                         | `gemma4:31b-cloud`       |
 | `OLLAMA_CLOUD_HOST`              | Cloud mode endpoint                                              | `https://ollama.com`     |
 | `OLLAMA_MODEL`                   | Model used by the AI boxes in local mode                         | `gemma3:1b`              |
 | `OLLAMA_HOST`                    | Local Ollama address                                             | `http://localhost:11434` |
@@ -210,6 +210,8 @@ PostgreSQL pool sizing and idle-connection recovery are controlled by
 | `SENTRY_MAX_REQUEST_BODY_SIZE`   | Body cap: `never`, `small`, `medium` or `always`                 | `medium`                 |
 | `SENTRY_COLLECT_STACK_VARIABLES` | Capture local variables in stack frames                          | `true`                   |
 | `TRIBUTARY_FETCH_TIMEOUT`        | Seconds before a feed request times out                          | `20`                     |
+| `TRIBUTARY_ARTICLE_LOCK_TIMEOUT` | Seconds to wait for another fetch of the same host               | `30`                     |
+| `TRIBUTARY_PIPE_RUN_TIMEOUT`     | Seconds a pipe run may spend before its next step is refused     | `900`                    |
 | `NEXT_PUBLIC_API_BASE`           | API address used by the reader                                   | `http://127.0.0.1:8000`  |
 
 The rest of the Sentry switches (`SENTRY_SEND_USER_INFO`,

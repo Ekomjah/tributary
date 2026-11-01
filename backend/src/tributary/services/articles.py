@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
-from ..db import utcnow
+from ..db import end_transaction, utcnow
 from ..models import Item
 from ..schemas import FetchStatus
 from .text import (
@@ -142,6 +142,9 @@ def fetch_article(
     host = urlsplit(item.link).hostname or "unknown"
     started = time.perf_counter()
 
+    # Release the transaction opened by the item lookup before the page fetch.
+    end_transaction(session)
+
     with sentry_sdk.start_span(op="article.fetch", name=host) as span:
         span.set_data("article.host", host)
         result = _fetch_page(
@@ -195,6 +198,10 @@ def backfill_frontmatter(
     items = list(session.scalars(stmt).all())
     if not items:
         return 0
+
+    # The select above opened a transaction; do not hold it across every page
+    # fetch in the backfill.
+    end_transaction(session)
 
     owns_client = client is None
     active_client = client or make_client(settings)
@@ -385,7 +392,10 @@ def _open_page(
     for _ in range(_MAX_REDIRECTS + 1):
         validate_public_url(current)
         hop_host = urlsplit(current).hostname or "unknown"
-        with _domain_lock(hop_host):
+        lock = _domain_lock(hop_host)
+        if not lock.acquire(timeout=settings.article_lock_timeout):
+            raise ArticleFetchError("timed out waiting for another fetch of this host")
+        try:
             _wait_for_domain(hop_host, settings.article_delay_seconds)
             request = client.build_request(
                 "GET",
@@ -397,6 +407,8 @@ def _open_page(
                 response = client.send(request, stream=True, follow_redirects=False)
             finally:
                 _DOMAIN_LAST[hop_host] = time.monotonic()
+        finally:
+            lock.release()
 
         if response.status_code in _REDIRECT_STATUSES:
             location = response.headers.get("location")

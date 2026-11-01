@@ -48,9 +48,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { api, apiBase, ApiError } from "@/lib/api";
+import { useDelayedFlag } from "@/components/feeds/use-slow-loading";
 import {
   feedsHref,
+  itemsQueryOptions,
   readScope,
+  sameScope,
   scopeAfterFeedDelete,
   VIEW_NAMES,
   VIEWS,
@@ -84,8 +87,19 @@ interface StatusMessage {
   error?: boolean;
 }
 
+interface PendingNavigation {
+  scope: FeedsScope;
+  since: number;
+}
+
 interface FeedsContextValue {
   scope: FeedsScope;
+  effectiveScope: FeedsScope;
+  pendingScope: FeedsScope | null;
+  pendingSince: number | null;
+  beginScopeNavigation: (next: FeedsScope) => void;
+  completeScopeNavigation: () => void;
+  prefetchScope: (next: FeedsScope) => void;
   navigateToScope: (
     next: FeedsScope,
     options?: { replace?: boolean; hash?: string },
@@ -225,6 +239,10 @@ export default function FeedsShell({
   const [addFeedOpen, setAddFeedOpen] = useState(false);
   const [addLabelOpen, setAddLabelOpen] = useState(false);
   const [feedToDelete, setFeedToDelete] = useState<Feed | null>(null);
+  const [pending, setPending] = useState<PendingNavigation | null>(null);
+
+  const effectiveScope = pending?.scope ?? scope;
+  const slow = useDelayedFlag(pending !== null, 1500);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -244,8 +262,8 @@ export default function FeedsShell({
   }, [feeds]);
 
   const currentFeed = useMemo(
-    () => feeds.find((feed) => feed.id === scope.feedId) ?? null,
-    [feeds, scope.feedId],
+    () => feeds.find((feed) => feed.id === effectiveScope.feedId) ?? null,
+    [effectiveScope.feedId, feeds],
   );
 
   const counts = useMemo<Record<ItemView, number>>(
@@ -279,11 +297,41 @@ export default function FeedsShell({
     status ??
     (queryError ? { message: messageOf(queryError), error: true } : null);
 
+  const beginScopeNavigation = useCallback(
+    (next: FeedsScope) => {
+      if (pathname === "/feeds" && sameScope(next, scope)) {
+        setPending(null);
+        return;
+      }
+      setPending({ scope: next, since: Date.now() });
+    },
+    [pathname, scope],
+  );
+
+  const completeScopeNavigation = useCallback(() => {
+    setPending(null);
+  }, []);
+
+  const prefetchScope = useCallback(
+    (next: FeedsScope) => {
+      if (sameScope(next, scope)) {
+        return;
+      }
+      const options = itemsQueryOptions(next);
+      if (queryClient.getQueryData(options.queryKey)) {
+        return;
+      }
+      void queryClient.prefetchQuery(options);
+    },
+    [queryClient, scope],
+  );
+
   const navigateToScope = useCallback(
     (
       next: FeedsScope,
       options?: { replace?: boolean; hash?: string },
     ) => {
+      beginScopeNavigation(next);
       const href = `${feedsHref(next)}${options?.hash ?? ""}`;
       if (options?.replace) {
         router.replace(href, { scroll: false });
@@ -291,8 +339,24 @@ export default function FeedsShell({
         router.push(href);
       }
     },
-    [router],
+    [beginScopeNavigation, router],
   );
+
+  useEffect(() => {
+    function onPopState() {
+      setPending(null);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (pathname === "/feeds") {
+      return;
+    }
+    const timer = window.setTimeout(() => setPending(null), 0);
+    return () => window.clearTimeout(timer);
+  }, [pathname]);
 
   useEffect(() => {
     if (!status) {
@@ -630,6 +694,11 @@ export default function FeedsShell({
           );
         }
 
+        queryClient.setQueryData<Feed[]>(["feeds"], (current) =>
+          current?.some((entry) => entry.id === feed.id)
+            ? current
+            : [...(current ?? []), feed],
+        );
         navigateToScope({
           view: "all",
           feedId: feed.id,
@@ -765,6 +834,12 @@ export default function FeedsShell({
   const value = useMemo<FeedsContextValue>(
     () => ({
       scope,
+      effectiveScope,
+      pendingScope: pending?.scope ?? null,
+      pendingSince: pending?.since ?? null,
+      beginScopeNavigation,
+      completeScopeNavigation,
+      prefetchScope,
       navigateToScope,
       search,
       setSearch,
@@ -797,8 +872,11 @@ export default function FeedsShell({
       scrollToTop,
     }),
     [
+      beginScopeNavigation,
       clearSearch,
+      completeScopeNavigation,
       counts,
+      effectiveScope,
       feedCounts,
       feedNames,
       feeds,
@@ -807,6 +885,8 @@ export default function FeedsShell({
       labels,
       navigateToScope,
       patchItem,
+      pending,
+      prefetchScope,
       refreshAll,
       refreshing,
       scope,
@@ -844,6 +924,15 @@ export default function FeedsShell({
             </Button>
             <Link
               href="/feeds"
+              scroll={false}
+              onNavigate={() =>
+                beginScopeNavigation({
+                  view: "all",
+                  feedId: null,
+                  label: null,
+                  query: "",
+                })
+              }
               className="text-[20px] font-bold leading-none text-danger hover:no-underline hover:opacity-80"
             >
               Tributary
@@ -864,7 +953,16 @@ export default function FeedsShell({
               value={search}
               onChange={(event) => {
                 searchOrigin.current = pathname;
-                setSearch(event.target.value);
+                const next = event.target.value;
+                setSearch(next);
+                if (
+                  next === scope.query &&
+                  pending &&
+                  pending.scope.query !== "" &&
+                  pending.scope.query !== scope.query
+                ) {
+                  completeScopeNavigation();
+                }
               }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
@@ -931,7 +1029,7 @@ export default function FeedsShell({
           </div>
         </header>
 
-        <div className="flex min-h-10 shrink-0 items-center justify-between gap-3 border-b border-divider bg-canvas px-4 max-[700px]:px-3">
+        <div className="relative flex min-h-10 shrink-0 items-center justify-between gap-3 border-b border-divider bg-canvas px-4 max-[700px]:px-3">
           <div className="flex min-w-0 items-center gap-2">
             <Button
               type="button"
@@ -967,25 +1065,41 @@ export default function FeedsShell({
             className="flex shrink-0 items-center gap-4 text-[13px] max-[700px]:gap-3 max-[700px]:text-[12px]"
           >
             {VIEWS.map((entry) => {
-              const active = scope.view === entry;
+              const target: FeedsScope = {
+                view: entry,
+                feedId: null,
+                label: null,
+                query: "",
+              };
+              const active = effectiveScope.view === entry;
               return (
-                <button
+                <Link
                   key={entry}
-                  type="button"
-                  onClick={() => selectView(entry)}
+                  href={feedsHref(target)}
+                  scroll={false}
+                  prefetch={false}
+                  onNavigate={() => beginScopeNavigation(target)}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "whitespace-nowrap",
+                    "whitespace-nowrap active:text-accent-dark",
                     active
                       ? "font-bold text-ink underline underline-offset-4"
                       : "text-muted hover:text-ink",
                   )}
                 >
                   {VIEW_NAMES[entry]}
-                </button>
+                </Link>
               );
             })}
           </nav>
+
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 -bottom-px h-0.5 transition-colors duration-100",
+              pending ? (slow ? "bg-warn" : "bg-accent") : "bg-transparent",
+            )}
+          />
         </div>
 
         {banner && (
@@ -1030,13 +1144,13 @@ export default function FeedsShell({
               feeds={feeds}
               feedCounts={feedCounts}
               labels={labels}
-              view={scope.view}
-              feedId={scope.feedId}
-              label={scope.label}
+              view={effectiveScope.view}
+              feedId={effectiveScope.feedId}
+              label={effectiveScope.label}
               viewCounts={counts}
-              onSelectView={selectView}
-              onSelectFeed={selectFeed}
-              onSelectLabel={selectLabel}
+              pendingScope={pending?.scope ?? null}
+              onBeginNavigate={beginScopeNavigation}
+              onPrefetchScope={prefetchScope}
               onAddFeed={() => setAddFeedOpen(true)}
               onAddLabel={() => setAddLabelOpen(true)}
               onDeleteFeed={setFeedToDelete}
@@ -1094,22 +1208,14 @@ export default function FeedsShell({
                   feeds={feeds}
                   feedCounts={feedCounts}
                   labels={labels}
-                  view={scope.view}
-                  feedId={scope.feedId}
-                  label={scope.label}
+                  view={effectiveScope.view}
+                  feedId={effectiveScope.feedId}
+                  label={effectiveScope.label}
                   viewCounts={counts}
-                  onSelectView={(next) => {
-                    selectView(next);
-                    setDrawerOpen(false);
-                  }}
-                  onSelectFeed={(next) => {
-                    selectFeed(next);
-                    setDrawerOpen(false);
-                  }}
-                  onSelectLabel={(next) => {
-                    selectLabel(next);
-                    setDrawerOpen(false);
-                  }}
+                  pendingScope={pending?.scope ?? null}
+                  onBeginNavigate={beginScopeNavigation}
+                  onPrefetchScope={prefetchScope}
+                  onNavigated={() => setDrawerOpen(false)}
                   onAddFeed={() => {
                     setDrawerOpen(false);
                     setAddFeedOpen(true);
