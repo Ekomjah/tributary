@@ -1,6 +1,5 @@
 "use client";
 
-import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
@@ -13,6 +12,7 @@ import {
 } from "react";
 
 import {
+  notifyApiUnauthorized,
   setApiAccessTokenGetter,
   setApiUnauthorizedHandler,
 } from "./api-auth";
@@ -73,22 +73,57 @@ export function useAuthSession(): AuthSession {
   return session;
 }
 
-function CloudAuthSession({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  const {
-    user,
-    isAuthenticated,
-    isLoading,
-    error,
-    getAccessTokenSilently,
-    loginWithRedirect,
-    logout,
-  } = useAuth0();
+interface Auth0Profile {
+  name?: string;
+  nickname?: string;
+  email?: string;
+  picture?: string;
+}
+
+function mapProfile(profile: Auth0Profile): AuthSessionUser {
+  return {
+    name: profile.name?.trim() || profile.nickname?.trim() || null,
+    email: profile.email?.trim() || null,
+    picture: profile.picture?.trim() || null,
+  };
+}
+
+async function readProfile(): Promise<Auth0Profile | null> {
+  const response = await fetch("/auth/profile", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (response.status === 401 || response.status === 204) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Auth0 profile request failed (${response.status}).`);
+  }
+  return (await response.json()) as Auth0Profile;
+}
+
+async function readAccessToken(): Promise<string | null> {
+  const response = await fetch("/auth/access-token", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (response.status === 401) {
+    notifyApiUnauthorized();
+    return null;
+  }
+  if (!response.ok) {
+    return null;
+  }
+  const body = (await response.json()) as { token?: unknown };
+  return typeof body.token === "string" ? body.token : null;
+}
+
+function CloudAuthSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  const [user, setUser] = useState<AuthSessionUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     setApiUnauthorizedHandler(() => {
@@ -99,16 +134,43 @@ function CloudAuthSession({
   }, [queryClient]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      setApiAccessTokenGetter(null);
-      return;
+    let cancelled = false;
+
+    async function loadProfile() {
+      try {
+        const profile = await readProfile();
+        if (cancelled) {
+          return;
+        }
+        setUser(profile ? mapProfile(profile) : null);
+        setAuthError(null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setUser(null);
+        setAuthError(
+          error instanceof Error
+            ? error.message
+            : "Could not check your Auth0 session.",
+        );
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     }
 
-    setApiAccessTokenGetter(async () => {
-      return (await getAccessTokenSilently()) ?? null;
-    });
+    void loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setApiAccessTokenGetter(readAccessToken);
     return () => setApiAccessTokenGetter(null);
-  }, [getAccessTokenSilently, isAuthenticated]);
+  }, []);
 
   const login = useCallback(() => {
     setSessionExpired(false);
@@ -116,47 +178,39 @@ function CloudAuthSession({
       typeof window === "undefined"
         ? "/feeds"
         : `${window.location.pathname}${window.location.search}`;
-    void loginWithRedirect({ appState: { returnTo } });
-  }, [loginWithRedirect]);
+    // The auth proxy must see a full document navigation so it can set the
+    // session cookie and redirect to Auth0.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign(
+      `${window.location.origin}/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+    );
+  }, []);
 
   const signOut = useCallback(() => {
     setSessionExpired(false);
     queryClient.clear();
-    void logout({
-      logoutParams: {
-        returnTo:
-          typeof window === "undefined" ? undefined : window.location.origin,
-      },
-    });
-  }, [logout, queryClient]);
+    const returnTo =
+      typeof window === "undefined" ? "/" : `${window.location.origin}/`;
+    // Logout is a full document navigation through the Auth0 proxy.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign(
+      `${window.location.origin}/auth/logout?returnTo=${encodeURIComponent(returnTo)}`,
+    );
+  }, [queryClient]);
 
   const value = useMemo<AuthSession>(
     () => ({
       mode: "cloud",
-      user: user
-        ? {
-            name: user.name?.trim() || user.nickname?.trim() || null,
-            email: user.email?.trim() || null,
-            picture: user.picture?.trim() || null,
-          }
-        : null,
-      isAuthenticated,
+      user,
+      isAuthenticated: user !== null,
       isLoading,
       sessionExpired,
-      authError: error ? error.message : null,
+      authError,
       configError: null,
       login,
       logout: signOut,
     }),
-    [
-      error,
-      isAuthenticated,
-      isLoading,
-      login,
-      sessionExpired,
-      signOut,
-      user,
-    ],
+    [authError, isLoading, login, sessionExpired, signOut, user],
   );
 
   return (
@@ -181,36 +235,13 @@ export function AuthProvider({
     );
   }
 
-  if (
-    config.error ||
-    config.domain === null ||
-    config.clientId === null ||
-    config.audience === null
-  ) {
+  if (config.error) {
     return (
-      <AuthSessionContext.Provider
-        value={configErrorSession(
-          config.error ?? "Cloud sign-in is not configured.",
-        )}
-      >
+      <AuthSessionContext.Provider value={configErrorSession(config.error)}>
         {children}
       </AuthSessionContext.Provider>
     );
   }
 
-  return (
-    <Auth0Provider
-      domain={config.domain}
-      clientId={config.clientId}
-      cacheLocation="memory"
-      useRefreshTokens
-      useRefreshTokensFallback
-      authorizationParams={{
-        audience: config.audience,
-        scope: "openid profile email",
-      }}
-    >
-      <CloudAuthSession>{children}</CloudAuthSession>
-    </Auth0Provider>
-  );
+  return <CloudAuthSession>{children}</CloudAuthSession>;
 }

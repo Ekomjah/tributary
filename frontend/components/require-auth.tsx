@@ -78,8 +78,8 @@ function SignIn() {
               {auth.configError}
             </p>
             <p className="mt-1 font-mono text-[10px] leading-4 text-faint">
-              Set DEV_ENV, AUTH0_DOMAIN, AUTH0_CLIENT_ID and AUTH0_AUDIENCE for
-              the frontend, then reload.
+              Set DEV_ENV, AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET,
+              AUTH0_SECRET, AUTH0_AUDIENCE and APP_BASE_URL, then reload.
             </p>
           </div>
         )}
@@ -102,8 +102,8 @@ function SignIn() {
         )}
 
         <p className="mt-4 border-t border-divider pt-3 text-[11px] leading-4 text-faint">
-          Tributary never receives your Auth0 password. The browser holds the
-          access token in memory and sends it to the API as a bearer token.
+          Auth0 keeps your session on the server. The browser asks it for a
+          short-lived access token only when it calls the Tributary API.
         </p>
       </div>
     </Frame>
