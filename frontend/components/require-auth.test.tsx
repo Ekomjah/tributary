@@ -67,7 +67,7 @@ describe("RequireAuth", () => {
     expect(screen.queryByText("Reader")).not.toBeInTheDocument();
   });
 
-  it("asks the visitor to sign in explicitly", async () => {
+  it("asks the visitor to sign in or create an account explicitly", async () => {
     const login = vi.fn();
     renderGate(
       session({
@@ -82,10 +82,12 @@ describe("RequireAuth", () => {
     expect(screen.queryByText("Reader")).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: /continue with auth0/i }),
+      screen.getByRole("button", { name: /^create account$/i }),
     );
+    expect(login).toHaveBeenCalledWith({ screenHint: "signup" });
 
-    expect(login).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
+    expect(login).toHaveBeenCalledWith();
   });
 
   it("renders the reader once signed in and the token bridge is ready", () => {
@@ -110,7 +112,10 @@ describe("RequireAuth", () => {
       screen.getByText(/missing auth0 domain/i),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /continue with auth0/i }),
+      screen.queryByRole("button", { name: /^create account$/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^sign in$/i }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Reader")).not.toBeInTheDocument();
   });

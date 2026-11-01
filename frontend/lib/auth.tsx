@@ -17,6 +17,9 @@ import {
   setApiUnauthorizedHandler,
 } from "./api-auth";
 import type { AuthMode, AuthRuntimeConfig } from "./auth-config";
+import { buildAuthLoginUrl, type AuthLoginOptions } from "./auth-url";
+
+export type { AuthLoginOptions } from "./auth-url";
 
 export interface AuthSessionUser {
   name: string | null;
@@ -32,7 +35,7 @@ export interface AuthSession {
   sessionExpired: boolean;
   authError: string | null;
   configError: string | null;
-  login: () => void;
+  login: (options?: AuthLoginOptions) => void;
   logout: () => void;
 }
 
@@ -172,17 +175,17 @@ function CloudAuthSession({ children }: { children: ReactNode }) {
     return () => setApiAccessTokenGetter(null);
   }, []);
 
-  const login = useCallback(() => {
+  const login = useCallback((options?: AuthLoginOptions) => {
     setSessionExpired(false);
     const returnTo =
-      typeof window === "undefined"
+      options?.returnTo ??
+      (typeof window === "undefined"
         ? "/feeds"
-        : `${window.location.pathname}${window.location.search}`;
+        : `${window.location.pathname}${window.location.search}`);
     // The auth proxy must see a full document navigation so it can set the
     // session cookie and redirect to Auth0.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign(
-      `${window.location.origin}/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+      buildAuthLoginUrl(window.location.origin, { ...options, returnTo }),
     );
   }, []);
 

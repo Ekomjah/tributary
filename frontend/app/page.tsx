@@ -12,7 +12,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import {
+  CloudBottomActions,
+  CloudHeaderAuth,
+  CloudHeroActions,
+} from "@/components/cloud-landing-auth";
 import { buttonVariants } from "@/components/ui/button";
+import { readAuthRuntimeConfig } from "@/lib/auth-config";
+import { landingCopy } from "@/lib/landing-copy";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -53,7 +60,6 @@ const BUILD_ROWS: [string, string][] = [
   ["Fetching", "httpx · feedparser · trafilatura"],
   ["Model", "Ollama · summaries, meaning filters, why-care"],
   ["Search", "SerpAPI, optional · refined by the local model"],
-  ["Storage", "One SQLite file · no accounts"],
 ];
 
 const PIPE_STEPS: {
@@ -148,6 +154,16 @@ function PipelineDiagram() {
 }
 
 export default function Home() {
+  // The root layout waits for a request before rendering, so the deploy
+  // profile is read per visit instead of being frozen into the build.
+  const { mode } = readAuthRuntimeConfig(process.env);
+  const copy = landingCopy(mode);
+  const isCloud = mode === "cloud";
+  const buildRows: [string, string][] = [
+    ...BUILD_ROWS,
+    ["Storage", copy.storageRow],
+  ];
+
   return (
     <div className="min-h-dvh bg-canvas text-ink">
       <header className="border-b border-divider bg-canvas">
@@ -162,10 +178,22 @@ export default function Home() {
             aria-label="Primary"
             className="ml-auto flex items-center gap-5 text-[12px] max-[700px]:gap-3"
           >
-            <Link href="/feeds" className="text-ink hover:text-accent">
+            <Link
+              href="/feeds"
+              className={cn(
+                "text-ink hover:text-accent",
+                isCloud && "max-[520px]:hidden",
+              )}
+            >
               Reader
             </Link>
-            <Link href="/pipes" className="text-ink hover:text-accent">
+            <Link
+              href="/pipes"
+              className={cn(
+                "text-ink hover:text-accent",
+                isCloud && "max-[520px]:hidden",
+              )}
+            >
               Pipes
             </Link>
             <a
@@ -174,6 +202,7 @@ export default function Home() {
             >
               How it’s built
             </a>
+            {isCloud && <CloudHeaderAuth />}
           </nav>
         </div>
       </header>
@@ -183,43 +212,44 @@ export default function Home() {
           <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
-                Self-hosted · local-first
+                {copy.eyebrow}
               </p>
               <h1 className="mt-3 max-w-[560px] text-[40px] font-bold leading-[1.08] tracking-[-0.02em] text-ink max-[700px]:text-[32px]">
                 A feed reader with pipes.
               </h1>
               <p className="mt-4 max-w-[540px] text-[15px] leading-6 text-muted">
-                Tributary pulls RSS and Atom feeds into one quiet inbox, then
-                lets you reshape the stream with small boxes: fetch, merge,
-                filter, summarize, read. It runs on your machine, and the model
-                boxes use Ollama locally.
+                {copy.description}
               </p>
 
-              <div className="mt-6 flex flex-wrap items-center gap-2">
-                <Link
-                  href="/feeds"
-                  className={cn(
-                    buttonVariants({ variant: "primary" }),
-                    "h-9 px-5",
-                  )}
-                >
-                  Open the reader
-                  <ArrowRight className="size-3.5" aria-hidden="true" />
-                </Link>
-                <Link
-                  href="/pipes"
-                  className={cn(
-                    buttonVariants({ variant: "secondary" }),
-                    "h-9 px-4",
-                  )}
-                >
-                  Build a pipe
-                </Link>
-              </div>
+              {isCloud ? (
+                <CloudHeroActions />
+              ) : (
+                <div className="mt-6 flex flex-wrap items-center gap-2">
+                  <Link
+                    href="/feeds"
+                    className={cn(
+                      buttonVariants({ variant: "primary" }),
+                      "h-9 px-5",
+                    )}
+                  >
+                    Open the reader
+                    <ArrowRight className="size-3.5" aria-hidden="true" />
+                  </Link>
+                  <Link
+                    href="/pipes"
+                    className={cn(
+                      buttonVariants({ variant: "secondary" }),
+                      "h-9 px-4",
+                    )}
+                  >
+                    Build a pipe
+                  </Link>
+                </div>
+              )}
 
               <p className="mt-5 flex items-center gap-1.5 text-[11px] text-faint">
                 <Lock className="size-3.5" aria-hidden="true" />
-                No account. No cloud. One SQLite file.
+                {copy.privacyNote}
               </p>
             </div>
 
@@ -262,21 +292,15 @@ export default function Home() {
                 How it was built
               </p>
               <h2 className="mt-2 text-[20px] font-bold text-ink">
-                Two local processes, one JSON spec.
+                {copy.buildHeading}
               </h2>
               <p className="mt-3 max-w-[440px] text-[13px] leading-5 text-muted">
-                The API is a small FastAPI service over SQLite. Feeds are
-                fetched with httpx, parsed with feedparser and cleaned with
-                trafilatura. Pipes are JSON specs executed by a box engine; the
-                CLI and the API run the same spec. The reader is Next.js App
-                Router with TanStack Query, and the editor is a React Flow
-                canvas. AI boxes call Ollama through one local client and cache
-                each answer in SQLite.
+                {copy.buildBody}
               </p>
             </div>
 
             <dl className="border-t border-divider">
-              {BUILD_ROWS.map(([label, value]) => (
+              {buildRows.map(([label, value]) => (
                 <div
                   key={label}
                   className="grid grid-cols-[120px_1fr] gap-4 border-b border-divider py-2.5 max-[520px]:grid-cols-1 max-[520px]:gap-0.5"
@@ -302,20 +326,26 @@ export default function Home() {
               </p>
             </div>
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-[13px] font-bold">
-              <Link
-                href="/feeds"
-                className="inline-flex items-center gap-1 text-accent hover:underline"
-              >
-                Open the reader
-                <ArrowRight className="size-3.5" aria-hidden="true" />
-              </Link>
-              <Link
-                href="/pipes"
-                className="inline-flex items-center gap-1 text-accent hover:underline"
-              >
-                Open the pipes
-                <ArrowRight className="size-3.5" aria-hidden="true" />
-              </Link>
+              {isCloud ? (
+                <CloudBottomActions />
+              ) : (
+                <>
+                  <Link
+                    href="/feeds"
+                    className="inline-flex items-center gap-1 text-accent hover:underline"
+                  >
+                    Open the reader
+                    <ArrowRight className="size-3.5" aria-hidden="true" />
+                  </Link>
+                  <Link
+                    href="/pipes"
+                    className="inline-flex items-center gap-1 text-accent hover:underline"
+                  >
+                    Open the pipes
+                    <ArrowRight className="size-3.5" aria-hidden="true" />
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -324,7 +354,7 @@ export default function Home() {
       <footer className="border-t border-divider">
         <div className="mx-auto flex max-w-[1040px] flex-wrap items-center justify-between gap-2 px-6 py-5 text-[11px] text-faint max-[700px]:px-4">
           <span>Tributary · MIT</span>
-          <span>Runs locally. No account, no algorithm.</span>
+          <span>{copy.footerTagline}</span>
         </div>
       </footer>
     </div>

@@ -52,19 +52,18 @@ function SignIn() {
       <div className="border border-line bg-canvas p-6">
         <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
           <Lock className="size-3" aria-hidden="true" />
-          Private beta
+          Hosted reader
         </p>
         <h1 className="mt-2 text-[20px] font-bold leading-tight text-ink">
           Sign in to Tributary
         </h1>
         <p className="mt-2 text-[13px] leading-5 text-muted">
-          The hosted reader keeps each library behind an Auth0 account. Sign in
-          with the account you were invited with to reach your feeds and pipes.
+          Sign in or create an account to reach your feeds and pipes.
         </p>
 
         {auth.sessionExpired && configured && (
           <p className="mt-3 border-l-[3px] border-l-warn bg-chrome px-2 py-1.5 text-[12px] leading-5 text-ink">
-            Your session expired. Continue with Auth0 to sign in again.
+            Your session expired. Sign in again to continue.
           </p>
         )}
 
@@ -91,14 +90,24 @@ function SignIn() {
         )}
 
         {configured && (
-          <Button
-            type="button"
-            variant="primary"
-            className="mt-5 h-9 w-full"
-            onClick={auth.login}
-          >
-            Continue with Auth0
-          </Button>
+          <div className="mt-5 flex flex-col gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              className="h-9 w-full"
+              onClick={() => auth.login({ screenHint: "signup" })}
+            >
+              Create account
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-9 w-full"
+              onClick={() => auth.login()}
+            >
+              Sign in
+            </Button>
+          </div>
         )}
 
         <p className="mt-4 border-t border-divider pt-3 text-[11px] leading-4 text-faint">
