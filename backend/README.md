@@ -28,6 +28,11 @@ instead; `postgres://` and `postgresql://` forms are normalized automatically.
 `migrations/` and run through Alembic at startup or with
 `uv run tributary init-db`. Leave `DEV_ENV` empty for the self-hosted build.
 
+In cloud mode the backend also requires PostgreSQL, `CORS_ORIGINS`, and Auth0
+`AUTH0_DOMAIN`, `AUTH0_AUDIENCE` and `AUTH0_CLIENT_ID`. Use the client ID from
+the reader's **Regular Web Application**; the reader owns the login session and
+sends the access token to this API as a bearer token.
+
 The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
 
 ## Status

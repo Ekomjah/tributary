@@ -248,11 +248,79 @@ Point the reader at the API with `NEXT_PUBLIC_API_BASE` before building. Keep
 `.env.local`, the SQLite database and the reader's `.next` directory off any
 public path.
 
+## Cloud profile
+
+A hosted deployment separates the API (Render) from the reader (Vercel). Set
+any non-empty `DEV_ENV` on both services to enable the account-backed profile:
+PostgreSQL, Auth0 sessions and explicit browser origins. The backend refuses to
+start in cloud mode without PostgreSQL, Auth0 settings and `CORS_ORIGINS`.
+
+### Auth0 application
+
+Create a **Regular Web Application** in Auth0, not a Single Page Application.
+Set its callback URL to `https://<reader-origin>/auth/callback` and its logout
+URL to `https://<reader-origin>/`. Use `client_secret_post` as the token
+endpoint authentication method. For local development the origin is usually
+`http://localhost:3000`, so the callback is
+`http://localhost:3000/auth/callback` and the logout URL is
+`http://localhost:3000/`.
+
+The reader uses the official `@auth0/nextjs-auth0` SDK. It mounts the
+`/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/profile` and
+`/auth/access-token` routes through `frontend/proxy.ts`; the browser never sees
+the client secret or the encrypted session cookie. The SDK keeps a rolling
+server-side session and rotates refresh tokens. The browser asks
+`/auth/access-token` for the short-lived token it sends to the API as a bearer
+token.
+
+### Backend environment
+
+```bash
+DEV_ENV=production
+DATABASE_URL=postgresql://...
+CORS_ORIGINS=https://your-reader.example.com
+
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_AUDIENCE=https://api.example.com
+AUTH0_CLIENT_ID=your-regular-web-client-id
+# Optional private beta allowlist:
+# AUTH0_ALLOWED_SUBS=auth0|abc123,auth0|def456
+# AUTH0_ALLOWED_EMAILS=ada@example.com,grace@example.com
+```
+
+`AUTH0_AUDIENCE` identifies the API. `AUTH0_CLIENT_ID` is the same Regular Web
+Application client ID used by the reader. Access tokens only carry an email
+claim when an Auth0 Action adds one, and the backend requires
+`email_verified=true` before it accepts an email allowlist match.
+
+### Reader environment
+
+Set these on Vercel, or in `frontend/.env.local` for local cloud-mode work:
+
+```bash
+DEV_ENV=production
+APP_BASE_URL=https://your-reader.example.com
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_CLIENT_ID=your-regular-web-client-id
+AUTH0_CLIENT_SECRET=your-client-secret
+AUTH0_AUDIENCE=https://api.example.com
+# 32 random bytes, hex encoded:
+#   openssl rand -hex 32
+AUTH0_SECRET=your-session-secret
+NEXT_PUBLIC_API_BASE=https://your-api.example.com
+```
+
+`APP_BASE_URL` must match the origin registered in Auth0. The client secret and
+`AUTH0_SECRET` are server-only; never prefix them with `NEXT_PUBLIC_` and never
+commit them. Changing the reader hostname means updating `APP_BASE_URL`, the
+Auth0 callback URL and the Auth0 logout URL together.
+
 ## Limitations
 
 - A search form in the reader and read-aloud are not implemented yet. Search works through the API, the CLI, the Search pipe box and the editor's query preview.
 - The reader and API run as separate local processes during development.
-- The build is single-user with no accounts. Keep it on your own machine or
+- The local build is single-user with no accounts. Cloud mode adds Auth0
+  accounts and per-user libraries; keep the local profile on your own machine or
   behind your own access control.
 
 ## Development
