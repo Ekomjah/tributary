@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from .api import feeds, items, labels, me, pipes, refine, runs, search_source
+from .api import feeds, items, labels, me, pipes, refine, runs, search_source, shares
 from .api.security import get_current_user
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
@@ -104,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refine.router,
         runs.router,
         search_source.router,
+        shares.router,
     ):
         app.include_router(
             router,

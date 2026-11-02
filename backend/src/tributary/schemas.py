@@ -108,6 +108,9 @@ class ItemOut(ORMModel):
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
+    shared_by: str | None = None
+    shared_at: datetime | None = None
+    origin_feed_title: str | None = None
     source: str | None = None
     is_read: bool
     starred: bool
@@ -128,6 +131,34 @@ class ArticleFetchOut(BaseModel):
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
+
+
+class ShareLinkOut(BaseModel):
+    """A newly created private link. The token is returned only once."""
+
+    token: str
+    expires_at: datetime
+
+
+class SharePreviewOut(BaseModel):
+    title: str
+    excerpt: str = ""
+    author: str | None = None
+    source: str | None = None
+    origin_feed_title: str | None = None
+    shared_by: str | None = None
+    shared_at: datetime
+    expires_at: datetime
+    claimed: bool = False
+    claimed_by_me: bool = False
+    shared_by_me: bool = False
+    claimed_item_id: int | None = None
+
+
+class ShareClaimOut(BaseModel):
+    item: ItemOut
+    feed: FeedOut
+    already_claimed: bool = False
 
 
 class ItemUpdate(BaseModel):

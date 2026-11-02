@@ -108,6 +108,14 @@ class Item(Base):
     content_full: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     fetch_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    discussion_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Provenance for a copy that arrived through a private share link. The
+    # recipient read/star/label state stays on their own row.
+    shared_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    origin_feed_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source: Mapped[str | None] = mapped_column(String(500), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     why_care: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -130,6 +138,47 @@ class Item(Base):
 
     def __repr__(self) -> str:
         return f"Item(id={self.id!r}, title={self.title!r}, decision={self.decision!r})"
+
+
+class Share(Base):
+    """A single-use private link to a snapshot of one article.
+
+    Only the SHA-256 hash of the link token is stored. The snapshot is kept in
+    JSON so a claim survives deletion of the sender's item or feed, and every
+    recipient gets an independent copy.
+    """
+
+    __tablename__ = "shares"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_shares_token_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    sender_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    claimed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    claimed_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"Share(id={self.id!r}, sender_id={self.sender_id!r})"
 
 
 class Label(Base):

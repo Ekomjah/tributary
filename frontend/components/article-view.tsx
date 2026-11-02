@@ -7,6 +7,7 @@ import {
   CircleCheck,
   ExternalLink,
   Loader2,
+  Share2,
   Sparkles,
   Star,
   Tag,
@@ -34,6 +35,7 @@ interface ArticleViewProps {
   onToggleDecision: (item: Item, decision: Decision) => void;
   onToggleLabel: (item: Item, label: Label) => void;
   onSelectFeed: (feedId: number) => void;
+  onShare?: (item: Item) => void;
 }
 
 export default function ArticleView({
@@ -51,6 +53,7 @@ export default function ArticleView({
   onToggleDecision,
   onToggleLabel,
   onSelectFeed,
+  onShare,
 }: ArticleViewProps) {
   const text = item.content_full ?? item.content;
   const readingTime = readingMinutes(plainText(text));
@@ -127,6 +130,17 @@ export default function ArticleView({
             {feedCount > 0 && <span>({feedCount})</span>}
             <span aria-hidden="true">·</span>
             <time dateTime={published}>{formatFullDate(published)}</time>
+            {item.shared_by && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="text-muted">
+                  Shared by {item.shared_by}
+                  {item.origin_feed_title
+                    ? ` from ${item.origin_feed_title}`
+                    : ""}
+                </span>
+              </>
+            )}
             {item.author && (
               <>
                 <span aria-hidden="true">·</span>
@@ -191,6 +205,18 @@ export default function ArticleView({
             onToggle={(entry) => onToggleLabel(item, entry)}
             triggerClassName="size-7 border border-line bg-chrome text-ink hover:bg-[#e8e8e8]"
           />
+
+          {onShare && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onShare(item)}
+            >
+              <Share2 className="size-3.5" />
+              Share
+            </Button>
+          )}
 
           {item.link && (
             <Button

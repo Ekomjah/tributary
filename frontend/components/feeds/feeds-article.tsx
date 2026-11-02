@@ -118,6 +118,8 @@ export default function FeedsArticle({ slug }: { slug: string }) {
     shortcutsBlocked,
     showError,
     scrollToTop,
+    sharingEnabled,
+    openShare,
   } = useFeeds();
 
   const itemId = itemIdFromSlug(slug);
@@ -375,6 +377,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       onToggleDecision={toggleDecision}
       onToggleLabel={toggleLabel}
       onSelectFeed={selectFeed}
+      onShare={sharingEnabled ? openShare : undefined}
     />
   );
 }

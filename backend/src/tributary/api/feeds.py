@@ -202,6 +202,11 @@ def refresh_feed(
     db: DbSession,
 ) -> FeedRefreshOut:
     feed = owned_feed(db, user.id, feed_id)
+    if feed.kind == "shared":
+        raise HTTPException(
+            status_code=400,
+            detail="Shared articles arrive when someone shares them.",
+        )
     if feed.kind == "search":
         raise HTTPException(
             status_code=400,

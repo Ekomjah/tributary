@@ -548,6 +548,17 @@ export default function ArticleList({
                   <time dateTime={item.published ?? item.fetched_at}>
                     {formatRelative(item.published ?? item.fetched_at)}
                   </time>
+                  {item.shared_by && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="text-muted">
+                        Shared by {item.shared_by}
+                        {item.origin_feed_title
+                          ? ` from ${item.origin_feed_title}`
+                          : ""}
+                      </span>
+                    </>
+                  )}
                   {opening && (
                     <>
                       <span aria-hidden="true">·</span>

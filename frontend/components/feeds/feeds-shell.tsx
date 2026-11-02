@@ -32,6 +32,7 @@ import AddFeedDialog from "@/components/add-feed-dialog";
 import AddLabelDialog from "@/components/add-label-dialog";
 import AccountMenu from "@/components/account-menu";
 import DeleteFeedDialog from "@/components/delete-feed-dialog";
+import ShareDialog from "@/components/share-dialog";
 import Sidebar from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +49,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { api, apiBase, ApiError } from "@/lib/api";
+import { useAuthSession } from "@/lib/auth";
 import { useDelayedFlag } from "@/components/feeds/use-slow-loading";
 import {
   feedsHref,
@@ -129,6 +131,8 @@ interface FeedsContextValue {
   toggleRead: (item: Item) => void;
   toggleDecision: (item: Item, decision: Decision) => void;
   toggleLabel: (item: Item, label: Label) => void;
+  sharingEnabled: boolean;
+  openShare: (item: Item) => void;
   openAddFeed: () => void;
   openAddLabel: () => void;
   shortcutsBlocked: boolean;
@@ -224,6 +228,8 @@ export default function FeedsShell({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const auth = useAuthSession();
+  const sharingEnabled = auth.mode === "cloud" && auth.isAuthenticated;
   const searchKey = searchParams.toString();
   const scope = useMemo(
     () => readScope(new URLSearchParams(searchKey)),
@@ -239,6 +245,7 @@ export default function FeedsShell({
   const [addFeedOpen, setAddFeedOpen] = useState(false);
   const [addLabelOpen, setAddLabelOpen] = useState(false);
   const [feedToDelete, setFeedToDelete] = useState<Feed | null>(null);
+  const [shareItem, setShareItem] = useState<Item | null>(null);
   const [pending, setPending] = useState<PendingNavigation | null>(null);
 
   const effectiveScope = pending?.scope ?? scope;
@@ -655,7 +662,15 @@ export default function FeedsShell({
     [toggleItemLabel],
   );
 
+  const openShare = useCallback((item: Item) => {
+    setShareItem(item);
+  }, []);
+
   const refreshAll = useCallback(() => {
+    if (currentFeed?.kind === "shared") {
+      showStatus("Shared articles arrive when someone shares them.");
+      return;
+    }
     if (currentFeed?.kind === "pipe") {
       if (!refreshingPipe) {
         runPipeRefresh(currentFeed.id);
@@ -671,6 +686,7 @@ export default function FeedsShell({
     refreshingPipe,
     runPipeRefresh,
     runRefresh,
+    showStatus,
   ]);
 
   const refreshing = refreshingAll || refreshingPipe;
@@ -746,7 +762,9 @@ export default function FeedsShell({
             ? `Removed “${name}”.`
             : feed.kind === "pipe"
               ? `Removed “${name}” from the reader.`
-              : `Deleted “${name}” and its articles.`,
+              : feed.kind === "shared"
+                ? `Removed “${name}” and its shared articles.`
+                : `Deleted “${name}” and its articles.`,
         );
 
         const nextScope = scopeAfterFeedDelete(scope, feed.id);
@@ -771,7 +789,11 @@ export default function FeedsShell({
   }, []);
 
   const shortcutsBlocked =
-    addFeedOpen || addLabelOpen || drawerOpen || feedToDelete !== null;
+    addFeedOpen ||
+    addLabelOpen ||
+    drawerOpen ||
+    feedToDelete !== null ||
+    shareItem !== null;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -866,6 +888,8 @@ export default function FeedsShell({
       toggleRead,
       toggleDecision,
       toggleLabel,
+      sharingEnabled,
+      openShare,
       openAddFeed: () => setAddFeedOpen(true),
       openAddLabel: () => setAddLabelOpen(true),
       shortcutsBlocked,
@@ -884,6 +908,7 @@ export default function FeedsShell({
       fetchingIds,
       labels,
       navigateToScope,
+      openShare,
       patchItem,
       pending,
       prefetchScope,
@@ -895,6 +920,7 @@ export default function FeedsShell({
       selectFeed,
       selectLabel,
       selectView,
+      sharingEnabled,
       shortcutsBlocked,
       showError,
       showStatus,
@@ -1186,6 +1212,15 @@ export default function FeedsShell({
           onConfirm={() =>
             feedToDelete ? deleteFeed(feedToDelete) : Promise.resolve(null)
           }
+        />
+        <ShareDialog
+          item={shareItem}
+          open={shareItem !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShareItem(null);
+            }
+          }}
         />
 
         <Dialog open={drawerOpen} onOpenChange={setDrawerOpen}>

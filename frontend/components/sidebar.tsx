@@ -8,6 +8,7 @@ import {
   Plus,
   Rss,
   Search,
+  Share2,
   Star,
   Tag,
   Trash2,
@@ -171,6 +172,7 @@ export default function Sidebar({
   onDeleteFeed,
 }: SidebarProps) {
   const subscriptions = feeds.filter((feed) => feed.kind === "feed");
+  const sharedFeeds = feeds.filter((feed) => feed.kind === "shared");
   const pipeFeeds = feeds.filter((feed) => feed.kind === "pipe");
   const searches = feeds.filter((feed) => feed.kind === "search");
 
@@ -277,6 +279,45 @@ export default function Sidebar({
                     deleteLabel={`Delete ${feed.title || feed.url}`}
                   >
                     {feed.title || feed.url}
+                  </Row>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <div className="my-2 border-t border-divider" />
+
+        <section aria-labelledby="sidebar-shared-feeds">
+          <SectionTitle>
+            <span id="sidebar-shared-feeds">Shared feeds</span>
+          </SectionTitle>
+
+          <div className="flex flex-col">
+            {sharedFeeds.length === 0 ? (
+              <p className="px-2 py-1 text-[12px] text-faint">
+                Links you claim land here.
+              </p>
+            ) : (
+              sharedFeeds.map((feed) => {
+                const target: FeedsScope = {
+                  view: "all",
+                  feedId: feed.id,
+                  label: null,
+                  query: "",
+                };
+                return (
+                  <Row
+                    key={feed.id}
+                    {...rowFor(target)}
+                    active={feedId === feed.id}
+                    icon={Share2}
+                    count={feedCounts[feed.id] ?? 0}
+                    title={feed.url}
+                    onDelete={() => onDeleteFeed(feed)}
+                    deleteLabel={`Remove ${feed.title || "Shared with me"} and its articles`}
+                  >
+                    {feed.title || "Shared with me"}
                   </Row>
                 );
               })

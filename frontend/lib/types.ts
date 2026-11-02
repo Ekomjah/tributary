@@ -5,7 +5,7 @@ export interface Label {
   name: string;
 }
 
-export type FeedKind = "feed" | "search" | "pipe";
+export type FeedKind = "feed" | "search" | "pipe" | "shared";
 
 export interface Feed {
   id: number;
@@ -53,6 +53,9 @@ export interface Item {
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
+  shared_by: string | null;
+  shared_at: string | null;
+  origin_feed_title: string | null;
   source: string | null;
   is_read: boolean;
   starred: boolean;
@@ -87,6 +90,32 @@ export interface ItemUpdate {
   starred?: boolean;
   decision?: Decision | null;
   label_ids?: number[];
+}
+
+export interface ShareLink {
+  token: string;
+  expires_at: string;
+}
+
+export interface SharePreview {
+  title: string;
+  excerpt: string;
+  author: string | null;
+  source: string | null;
+  origin_feed_title: string | null;
+  shared_by: string | null;
+  shared_at: string;
+  expires_at: string;
+  claimed: boolean;
+  claimed_by_me: boolean;
+  shared_by_me: boolean;
+  claimed_item_id: number | null;
+}
+
+export interface ShareClaimResult {
+  item: Item;
+  feed: Feed;
+  already_claimed: boolean;
 }
 
 export interface FeedRefreshResult {

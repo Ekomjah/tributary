@@ -17,6 +17,9 @@ import type {
   PipeRunRecord,
   PipeSpec,
   SearchRefinement,
+  ShareClaimResult,
+  ShareLink,
+  SharePreview,
 } from "./types";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
@@ -231,6 +234,27 @@ export const api = {
       url: `/api/items/${itemId}`,
       method: "PATCH",
       data: update,
+    });
+  },
+
+  createShareLink(itemId: number): Promise<ShareLink> {
+    return request<ShareLink>({
+      url: `/api/items/${itemId}/share-link`,
+      method: "POST",
+    });
+  },
+
+  getShare(token: string, signal?: AbortSignal): Promise<SharePreview> {
+    return request<SharePreview>({
+      url: `/api/shares/${encodeURIComponent(token)}`,
+      signal,
+    });
+  },
+
+  claimShare(token: string): Promise<ShareClaimResult> {
+    return request<ShareClaimResult>({
+      url: `/api/shares/${encodeURIComponent(token)}/claim`,
+      method: "POST",
     });
   },
 
