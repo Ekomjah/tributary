@@ -1,9 +1,22 @@
 "use client";
 
-import { useMemo } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { Loader2, Sparkles, TriangleAlert } from "lucide-react";
 
 import { ArticleImage, useArticleImages } from "@/components/article-image";
+import {
+  collectArticleImages,
+  galleryIndexForSrc,
+  sameGallery,
+  type GalleryImage,
+} from "@/lib/article-images";
 import { hashtagHref, hashtagifyHtml, splitHashtags } from "@/lib/hashtags";
 import { contentBlocks } from "@/lib/text";
 import type { FetchStatus, Item } from "@/lib/types";
@@ -41,12 +54,16 @@ interface ArticleBodyProps {
   item: Item;
   fetching?: boolean;
   className?: string;
+  onGalleryChange?: (images: GalleryImage[]) => void;
+  onOpenGallery?: (index: number) => void;
 }
 
 export default function ArticleBody({
   item,
   fetching = false,
   className,
+  onGalleryChange,
+  onOpenGallery,
 }: ArticleBodyProps) {
   const text = item.content_full ?? item.content;
   const blocks = useMemo(
@@ -65,11 +82,100 @@ export default function ArticleBody({
     item.fetch_status !== null &&
     item.fetch_status !== "ok";
   const waitingForText = fetching && item.content_full === null;
-  const bodyRef = useArticleImages(bodyHtml);
+  const galleryEnabled = Boolean(onOpenGallery);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useArticleImages(bodyHtml, { gallery: galleryEnabled });
+  const [gallery, setGallery] = useState<GalleryImage[]>([]);
+  const galleryRef = useRef<GalleryImage[]>([]);
+  const onGalleryChangeRef = useRef(onGalleryChange);
   const coverImage = item.cover_image;
 
+  useEffect(() => {
+    onGalleryChangeRef.current = onGalleryChange;
+  }, [onGalleryChange]);
+
+  useEffect(() => {
+    if (!galleryEnabled) {
+      return;
+    }
+
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+
+    const update = () => {
+      const next = collectArticleImages(root);
+      galleryRef.current = next;
+      setGallery((current) => (sameGallery(current, next) ? current : next));
+      onGalleryChangeRef.current?.(next);
+    };
+
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-image-state"],
+      childList: true,
+      subtree: true,
+    });
+
+    return () => observer.disconnect();
+  }, [bodyHtml, galleryEnabled, item.id]);
+
+  const handleBodyClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!galleryEnabled) {
+        return;
+      }
+
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const frame = target.closest<HTMLElement>(".article-image-frame");
+      if (
+        !frame ||
+        frame.dataset.imageVariant === "inline" ||
+        frame.dataset.imageState === "error"
+      ) {
+        return;
+      }
+
+      const image = frame.querySelector<HTMLImageElement>("img");
+      if (!image) {
+        return;
+      }
+
+      const link = target.closest("a[href]");
+      if (
+        link &&
+        (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      ) {
+        return;
+      }
+
+      const index = galleryIndexForSrc(
+        galleryRef.current,
+        image.getAttribute("src"),
+      );
+      if (index === -1) {
+        return;
+      }
+
+      if (link) {
+        event.preventDefault();
+      }
+      onOpenGallery?.(index);
+    },
+    [galleryEnabled, onOpenGallery],
+  );
+
+  const coverIndex = galleryIndexForSrc(gallery, coverImage);
+
   return (
-    <div className={className}>
+    <div ref={rootRef} className={className}>
       {coverImage && (
         <ArticleImage
           key={coverImage}
@@ -77,6 +183,14 @@ export default function ArticleBody({
           alt={item.cover_image_alt || item.title || "Article cover"}
           className="article-cover"
           eager
+          onActivate={
+            coverIndex === -1 ? undefined : () => onOpenGallery?.(coverIndex)
+          }
+          activateLabel={
+            item.cover_image_alt
+              ? `View image: ${item.cover_image_alt}`
+              : "View article cover"
+          }
           caption={
             item.cover_caption ? (
               <HashtagText text={item.cover_caption} />
@@ -97,6 +211,7 @@ export default function ArticleBody({
           <div
             ref={bodyRef}
             className="article-html"
+            onClick={handleBodyClick}
             dangerouslySetInnerHTML={{ __html: bodyHtml }}
           />
         ) : blocks.length > 0 ? (
