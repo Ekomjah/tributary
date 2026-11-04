@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Decision = Literal["keep", "drop"]
 FetchStatus = Literal["ok", "empty", "blocked", "error"]
+IngestState = Literal["ready", "pending", "partial"]
 
 
 class ORMModel(BaseModel):
@@ -43,6 +44,10 @@ class FeedOut(ORMModel):
     pipe_id: int | None = None
     last_fetched: datetime | None = None
     last_error: str | None = None
+    ingest_state: IngestState = "ready"
+    ingest_total: int = 0
+    ingest_processed: int = 0
+    ingest_error: str | None = None
     created_at: datetime
 
 
@@ -55,6 +60,7 @@ class FeedRefreshOut(BaseModel):
     kind: str = "feed"
     new_items: int = 0
     total_entries: int = 0
+    pending_entries: int = 0
     not_modified: bool = False
     error: str | None = None
 
@@ -108,6 +114,9 @@ class ItemOut(ORMModel):
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
+    discussion_url: str | None = None
+    points: int | None = None
+    comment_count: int | None = None
     shared_by: str | None = None
     shared_at: datetime | None = None
     origin_feed_title: str | None = None
@@ -131,6 +140,23 @@ class ArticleFetchOut(BaseModel):
     content_full: str | None = None
     content_fetched_at: datetime | None = None
     fetch_status: FetchStatus | None = None
+    discussion_url: str | None = None
+    points: int | None = None
+    comment_count: int | None = None
+
+
+class ItemUpdate(BaseModel):
+    is_read: bool | None = None
+    starred: bool | None = None
+    decision: Decision | None = None
+    label_ids: list[int] | None = None
+
+
+class ItemPage(BaseModel):
+    items: list[ItemOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class ShareLinkOut(BaseModel):
@@ -159,20 +185,6 @@ class ShareClaimOut(BaseModel):
     item: ItemOut
     feed: FeedOut
     already_claimed: bool = False
-
-
-class ItemUpdate(BaseModel):
-    is_read: bool | None = None
-    starred: bool | None = None
-    decision: Decision | None = None
-    label_ids: list[int] | None = None
-
-
-class ItemPage(BaseModel):
-    items: list[ItemOut]
-    total: int
-    limit: int
-    offset: int
 
 
 SearchEngine = Literal["google_news", "google"]

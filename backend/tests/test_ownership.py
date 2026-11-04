@@ -194,7 +194,7 @@ def test_feed_endpoints_are_owner_scoped(
 
     seen: dict[str, int] = {}
 
-    def fake_refresh(factory, settings, *, owner_id):
+    def fake_refresh(factory, settings, *, owner_id, defer=False):
         seen["owner_id"] = owner_id
         return []
 

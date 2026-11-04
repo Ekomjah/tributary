@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from sqlalchemy import select
 
 from ..db import end_transaction
@@ -25,6 +25,21 @@ from .ownership import owned_feed, owned_pipe
 router = APIRouter(prefix="/feeds", tags=["feeds"])
 
 
+def _schedule_ingest(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    result: feeds.FetchResult,
+) -> None:
+    """Continue a deferred feed ingestion after the response is sent."""
+
+    if result.continuation is not None:
+        background_tasks.add_task(
+            feeds.run_ingest_job,
+            request.app.state.session_factory,
+            result.continuation,
+        )
+
+
 @router.get("", response_model=list[FeedOut])
 def list_feeds(user: CurrentUser, db: DbSession) -> list[Feed]:
     return list(
@@ -41,6 +56,7 @@ def create_feed(
     payload: FeedCreate,
     user: CurrentUser,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> FeedAddOut:
     url = feeds.normalize_url(payload.url)
@@ -63,6 +79,7 @@ def create_feed(
                 client=client,
                 title=payload.title,
                 min_full_chars=settings.article_min_chars,
+                defer=True,
             )
     except UnsafeUrlError as exc:
         db.rollback()
@@ -91,6 +108,7 @@ def create_feed(
 
     db.commit()
     db.refresh(feed)
+    _schedule_ingest(background_tasks, request, result)
     return FeedAddOut(
         feed=FeedOut.model_validate(feed),
         result=FeedRefreshOut.model_validate(result),
@@ -136,6 +154,7 @@ def add_pipe_feed(
 def refresh_all(
     user: CurrentUser,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> list[FeedRefreshOut]:
     settings = request.app.state.settings
@@ -153,7 +172,10 @@ def refresh_all(
         request.app.state.session_factory,
         settings,
         owner_id=user.id,
+        defer=True,
     )
+    for result in results:
+        _schedule_ingest(background_tasks, request, result)
     return [FeedRefreshOut.model_validate(result) for result in results]
 
 
@@ -199,6 +221,7 @@ def refresh_feed(
     feed_id: int,
     user: CurrentUser,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> FeedRefreshOut:
     feed = owned_feed(db, user.id, feed_id)
@@ -251,6 +274,8 @@ def refresh_feed(
             owner_id=user.id,
             client=client,
             min_full_chars=settings.article_min_chars,
+            defer=True,
         )
     db.commit()
+    _schedule_ingest(background_tasks, request, result)
     return FeedRefreshOut.model_validate(result)

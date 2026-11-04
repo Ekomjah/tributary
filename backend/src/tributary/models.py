@@ -69,6 +69,29 @@ class Feed(Base):
     etag: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_modified: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Feed entries are stored in batches so a large feed can render its newest
+    # items before the rest has been normalized. "pending" means a background
+    # worker is still active; "partial" means it stopped and a refresh is needed.
+    ingest_state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="ready",
+        server_default="ready",
+    )
+    ingest_total: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    ingest_processed: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    ingest_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ingest_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
 
     owner: Mapped[User] = relationship(back_populates="feeds")

@@ -31,7 +31,7 @@ NAMING_CONVENTION = {
 
 BASELINE_REVISION = "0001_baseline"
 USERS_REVISION = "0003_users"
-HEAD_REVISION = "0007_shares"
+HEAD_REVISION = "0008_feed_ingestion"
 # Internal foreign-key anchor for account-free local installs. It is not an
 # account and is never accepted in cloud mode.
 LOCAL_AUTH0_SUB = "local"

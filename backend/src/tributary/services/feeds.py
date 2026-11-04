@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+import secrets
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -35,17 +37,22 @@ from .urls import redact_url, redact_urls_in_text, validate_public_url
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "BATCH_SIZE",
     "Download",
+    "EntryBody",
     "FeedFetchError",
     "FeedParseError",
     "FetchResult",
+    "IngestJob",
     "add_feed",
     "download_url",
     "fetch_feed",
     "make_client",
     "normalize_url",
     "parse_feed",
+    "recover_interrupted_ingests",
     "refresh_feeds",
+    "run_ingest_job",
     "store_entries",
 ]
 
@@ -53,6 +60,11 @@ _MAX_REDIRECTS = 5
 _MAX_FEED_BYTES = 2_000_000
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _IMAGE_SUFFIXES = (".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp")
+
+# Keep the first paint small while still making progress on large feeds. The
+# same size is used by the reader's list pages, so a refresh that is still
+# ingesting never has to expose a partially empty first page.
+BATCH_SIZE = 20
 
 
 class FeedFetchError(RuntimeError):
@@ -74,6 +86,23 @@ class Download:
 
 
 @dataclass(slots=True)
+class IngestJob:
+    """Entries left to store after the first synchronous feed batch."""
+
+    feed_id: int
+    owner_id: int
+    feed_url: str
+    token: str
+    entries: list[Any]
+    # Every entry in one feed download shares a base time; the position is
+    # subtracted from it so undated entries and date ties keep the feed's order
+    # in the list API's fetched_at tie-break.
+    fetched_at_base: datetime = field(default_factory=utcnow)
+    position_offset: int = 0
+    min_full_chars: int = 500
+
+
+@dataclass(slots=True)
 class FetchResult:
     """Outcome of fetching one feed."""
 
@@ -82,12 +111,37 @@ class FetchResult:
     title: str = ""
     new_items: int = 0
     total_entries: int = 0
+    pending_entries: int = 0
     not_modified: bool = False
     error: str | None = None
+    # Held only in memory by the request that will schedule the background
+    # worker. It is deliberately excluded from the API schema.
+    continuation: IngestJob | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass(slots=True)
+class EntryBody:
+    """The body text and optional metadata parsed from one feed entry."""
+
+    text: str
+    full_text: str | None = None
+    html: str | None = None
+    discussion_url: str | None = None
+    points: int | None = None
+    comment_count: int | None = None
+
+
+_HN_HOSTS = frozenset({"hnrss.org", "hnrss.com", "news.ycombinator.com"})
+_HN_ARTICLE_URL = re.compile(r"Article URL:\s*(https?://\S+)", re.IGNORECASE)
+_HN_COMMENTS_URL = re.compile(r"Comments URL:\s*(https?://\S+)", re.IGNORECASE)
+_HN_POINTS = re.compile(r"Points:\s*([\d,]+)", re.IGNORECASE)
+_HN_COMMENT_COUNT = re.compile(r"#\s*Comments:\s*([\d,]+)", re.IGNORECASE)
+_HN_SEPARATOR = re.compile(r"<hr\b[^>]*>", re.IGNORECASE)
+_URL_TRAILING = ".,;:!?)]}"
 
 
 def normalize_url(url: str) -> str:
@@ -231,12 +285,16 @@ def fetch_feed(
     owner_id: int,
     client: httpx.Client,
     min_full_chars: int = 500,
+    defer: bool = False,
 ) -> FetchResult:
     """Fetch one feed, store new items, and record the outcome.
 
     Network and parse failures are recorded on an existing feed and returned in
     the result instead of raised, so a refresh can continue with the next feed.
     A failed first fetch creates no feed row.
+
+    When ``defer`` is true, only the newest batch is stored synchronously. The
+    result carries an in-memory continuation for the caller to schedule.
     """
 
     canonical_url = normalize_url(url)
@@ -252,11 +310,13 @@ def fetch_feed(
             owner_id=owner_id,
             client=client,
             min_full_chars=min_full_chars,
+            defer=defer,
         )
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         span.set_data("feed.new_items", result.new_items)
         span.set_data("feed.total_entries", result.total_entries)
+        span.set_data("feed.pending_entries", result.pending_entries)
         span.set_data("feed.not_modified", result.not_modified)
         if result.error:
             span.set_status("internal_error")
@@ -272,13 +332,16 @@ def _fetch_feed(
     owner_id: int,
     client: httpx.Client,
     min_full_chars: int = 500,
+    defer: bool = False,
 ) -> FetchResult:
     feed = session.scalar(
         select(Feed).where(Feed.owner_id == owner_id, Feed.url == url)
     )
 
     headers: dict[str, str] = {}
-    if feed is not None:
+    # A feed that stopped halfway through ingestion must be downloaded in full
+    # again; a conditional request could answer 304 and hide the missing items.
+    if feed is not None and feed.ingest_state == "ready":
         if feed.etag:
             headers["If-None-Match"] = feed.etag
         if feed.last_modified:
@@ -326,6 +389,7 @@ def _fetch_feed(
         parsed,
         download,
         min_full_chars=min_full_chars,
+        defer=defer,
     )
 
 
@@ -337,12 +401,15 @@ def add_feed(
     client: httpx.Client,
     title: str | None = None,
     min_full_chars: int = 500,
+    defer: bool = False,
 ) -> tuple[Feed, FetchResult]:
     """Validate a feed URL, create it, and ingest its entries in one request.
 
     The row is created only after the response has been downloaded and parsed.
     Network, unsafe-URL, and parse failures are raised for the API to map to the
     right status code; nothing is written in that case.
+
+    When ``defer`` is true, only the newest batch is stored synchronously.
     """
 
     canonical_url = normalize_url(url)
@@ -363,6 +430,7 @@ def add_feed(
         download,
         min_full_chars=min_full_chars,
         title_override=title,
+        defer=defer,
     )
     return feed, result
 
@@ -375,6 +443,7 @@ def _store_parsed(
     *,
     min_full_chars: int,
     title_override: str | None = None,
+    defer: bool = False,
 ) -> FetchResult:
     title = readable_title(str(parsed.feed.get("title") or "")).strip()
     override = (title_override or "").strip()
@@ -389,14 +458,46 @@ def _store_parsed(
     feed.last_fetched = utcnow()
     feed.last_error = None
 
-    entries = list(parsed.entries)
+    # The list orders by published date, so the first synchronous batch must
+    # contain the newest entries rather than whatever happens to be first in
+    # the XML. Python's sort is stable, which keeps the feed's own order for
+    # undated entries and date ties.
+    entries = _sort_entries_newest_first(list(parsed.entries))
+    first_batch = entries[:BATCH_SIZE] if defer else entries
+    remaining = entries[BATCH_SIZE:] if defer else []
+    fetched_at_base = utcnow()
+
     new_items = store_entries(
         session,
         feed,
-        entries,
+        first_batch,
         feed_url=download.url,
         min_full_chars=min_full_chars,
+        fetched_at_base=fetched_at_base,
     )
+
+    feed.ingest_total = len(entries)
+    feed.ingest_processed = len(first_batch)
+    feed.ingest_error = None
+
+    if remaining:
+        token = secrets.token_hex(16)
+        feed.ingest_state = "pending"
+        feed.ingest_token = token
+        continuation = IngestJob(
+            feed_id=feed.id,
+            owner_id=feed.owner_id,
+            feed_url=download.url,
+            token=token,
+            entries=remaining,
+            fetched_at_base=fetched_at_base,
+            position_offset=len(first_batch),
+            min_full_chars=min_full_chars,
+        )
+    else:
+        feed.ingest_state = "ready"
+        feed.ingest_token = None
+        continuation = None
 
     return FetchResult(
         url=feed.url,
@@ -404,6 +505,8 @@ def _store_parsed(
         title=feed.title,
         new_items=new_items,
         total_entries=len(entries),
+        pending_entries=len(remaining),
+        continuation=continuation,
     )
 
 
@@ -414,23 +517,29 @@ def store_entries(
     *,
     feed_url: str,
     min_full_chars: int = 500,
+    fetched_at_base: datetime | None = None,
+    position_offset: int = 0,
 ) -> int:
     """Store unseen entries, using the final feed URL for relative links."""
 
     existing_guids = set(session.scalars(select(Item.guid).where(Item.feed_id == feed.id)).all())
     now = utcnow()
+    base = fetched_at_base or now
     new_items = 0
 
-    for entry in entries:
+    for position, entry in enumerate(entries, start=position_offset):
         link = _entry_link(entry, feed_url)
         guid = _entry_guid(entry, link)
         if not guid or guid in existing_guids:
             continue
 
-        content, full_text = _entry_text(entry)
-        has_full_text = bool(full_text and len(full_text) >= min_full_chars)
         base_url = link or feed_url
-        content_html = _entry_html(entry, base_url)
+        body = _entry_body(entry, base_url, feed_url)
+        content = body.text
+        # A real content:encoded or Atom <content> is the publisher's full
+        # text even when it is short. A <description> never counts as full.
+        has_full_text = bool(body.full_text and body.full_text.strip())
+        content_html = body.html
         cover_image, cover_image_alt, cover_caption = _entry_cover(
             entry,
             content_html,
@@ -449,14 +558,17 @@ def store_entries(
                 published=_entry_published(entry),
                 content=content,
                 content_html=content_html,
+                discussion_url=body.discussion_url,
+                points=body.points,
+                comment_count=body.comment_count,
                 author=_entry_author(entry),
                 cover_image=cover_image,
                 cover_image_alt=cover_image_alt,
                 cover_caption=cover_caption,
-                content_full=full_text if has_full_text else None,
+                content_full=body.full_text if has_full_text else None,
                 fetch_status="ok" if has_full_text else None,
                 content_fetched_at=now if has_full_text else None,
-                fetched_at=now,
+                fetched_at=base - timedelta(microseconds=position),
             )
         )
         existing_guids.add(guid)
@@ -471,8 +583,13 @@ def refresh_feeds(
     *,
     owner_id: int,
     client: httpx.Client | None = None,
+    defer: bool = False,
 ) -> list[FetchResult]:
-    """Refresh every feed owned by one user, isolating failures per feed."""
+    """Refresh every feed owned by one user, isolating failures per feed.
+
+    With ``defer`` true, each result may carry a continuation for the caller to
+    schedule as a background task.
+    """
 
     with session_factory() as session:
         rows = session.execute(
@@ -494,13 +611,18 @@ def refresh_feeds(
             for feed_id, url in rows:
                 try:
                     with session_scope(session_factory) as session:
+                        options = {
+                            "owner_id": owner_id,
+                            "client": active_client,
+                            "min_full_chars": settings.article_min_chars,
+                        }
+                        if defer:
+                            options["defer"] = True
                         results.append(
                             fetch_feed(
                                 session,
                                 url,
-                                owner_id=owner_id,
-                                client=active_client,
-                                min_full_chars=settings.article_min_chars,
+                                **options,
                             )
                         )
                 except Exception as exc:
@@ -577,6 +699,155 @@ def _mark_feed_error(
             feed_id,
             _format_error(exc),
         )
+
+
+def _sort_entries_newest_first(entries: list[Any]) -> list[Any]:
+    """Order feed entries the same way the list API will order their items.
+
+    Dated entries come first, newest first. Undated entries keep the order the
+    feed supplied, which is normally already newest-first.
+    """
+
+    def key(entry: Any) -> tuple[bool, float]:
+        published = _entry_published(entry)
+        if published is None:
+            return (True, 0.0)
+        return (False, -published.timestamp())
+
+    return sorted(entries, key=key)
+
+
+def run_ingest_job(
+    session_factory: sessionmaker[Session],
+    job: IngestJob,
+) -> None:
+    """Store the remaining entries of a feed in short, committed batches.
+
+    This function is intended for a background worker. It never raises to the
+    caller; a failed batch leaves the feed in ``partial`` so the next refresh
+    can download the feed again and finish it.
+    """
+
+    started = time.perf_counter()
+    safe_url = redact_url(job.feed_url)
+    total = len(job.entries)
+    stored = 0
+
+    try:
+        for start in range(0, total, BATCH_SIZE):
+            chunk = job.entries[start : start + BATCH_SIZE]
+            with session_scope(session_factory) as session:
+                feed = session.get(Feed, job.feed_id)
+                if feed is None or feed.ingest_token != job.token:
+                    logger.info(
+                        "Stopped stale feed ingestion for %s (feed %s)",
+                        safe_url,
+                        job.feed_id,
+                    )
+                    return
+
+                stored += store_entries(
+                    session,
+                    feed,
+                    chunk,
+                    feed_url=job.feed_url,
+                    min_full_chars=job.min_full_chars,
+                    fetched_at_base=job.fetched_at_base,
+                    position_offset=job.position_offset + start,
+                )
+                feed.ingest_processed = min(
+                    feed.ingest_total,
+                    feed.ingest_processed + len(chunk),
+                )
+                final_batch = start + len(chunk) >= total
+                feed.ingest_state = "ready" if final_batch else "pending"
+                if final_batch:
+                    feed.ingest_token = None
+                    feed.ingest_error = None
+    except Exception as exc:
+        logger.error(
+            "Feed ingestion failed for %s (feed %s): %s",
+            safe_url,
+            job.feed_id,
+            _format_error(exc),
+        )
+        _mark_ingest_error(
+            session_factory,
+            job.feed_id,
+            job.token,
+            _format_error(exc),
+        )
+        return
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "Finished feed ingestion for %s: %d entries, %d new items in %.0f ms",
+        safe_url,
+        total,
+        stored,
+        elapsed_ms,
+    )
+    try:
+        sentry_sdk.metrics.count("feed.ingest.jobs", 1, attributes={"outcome": "ok"})
+        sentry_sdk.metrics.distribution(
+            "feed.ingest.duration",
+            elapsed_ms,
+            unit="millisecond",
+            attributes={"outcome": "ok"},
+        )
+        sentry_sdk.metrics.count(
+            "feed.ingest.entries",
+            total,
+            attributes={"outcome": "ok"},
+        )
+    except Exception:  # pragma: no cover - telemetry must never break ingestion
+        logger.debug("Sentry ingest metrics failed", exc_info=True)
+
+
+def _mark_ingest_error(
+    session_factory: sessionmaker[Session],
+    feed_id: int,
+    token: str,
+    message: str,
+) -> None:
+    try:
+        with session_scope(session_factory) as session:
+            feed = session.get(Feed, feed_id)
+            if feed is None or feed.ingest_token != token:
+                return
+            feed.ingest_state = "partial"
+            feed.ingest_error = message
+            feed.ingest_token = None
+            # The next refresh must not get a 304 while entries are missing.
+            feed.etag = None
+            feed.last_modified = None
+    except Exception:
+        logger.error(
+            "Could not mark interrupted ingestion for feed %s: %s",
+            feed_id,
+            message,
+        )
+
+
+def recover_interrupted_ingests(session_factory: sessionmaker[Session]) -> int:
+    """Mark feeds whose background ingestion did not survive a restart."""
+
+    with session_scope(session_factory) as session:
+        feeds = session.scalars(
+            select(Feed).where(Feed.ingest_state == "pending")
+        ).all()
+        for feed in feeds:
+            feed.ingest_state = "partial"
+            feed.ingest_error = "Loading was interrupted. Refresh to finish."
+            feed.ingest_token = None
+            # Conditional headers would hide the entries that were never stored.
+            feed.etag = None
+            feed.last_modified = None
+        count = len(feeds)
+
+    if count:
+        logger.warning("Marked %d interrupted feed ingestion(s) as partial", count)
+    return count
 
 
 def _record_metrics(result: FetchResult, elapsed_ms: float) -> None:
@@ -678,6 +949,104 @@ def _entry_text(entry: Any) -> tuple[str, str | None]:
 
     raw_summary = str(entry.get("summary") or entry.get("description") or "")
     return html_to_text(raw_summary), None
+
+
+def _entry_body(entry: Any, base_url: str, feed_url: str) -> EntryBody:
+    """Return the entry body and any site-specific metadata.
+
+    Hacker News feeds put a link post's metadata in the description itself.
+    The generic path stores that boilerplate as the article body, which then
+    hides the real summary in the reader. The HN adapter splits the optional
+    self-post text from the ``Comments URL`` / ``Points`` footer.
+    """
+
+    if _is_hacker_news_entry(entry, feed_url):
+        body = _hacker_news_body(entry, base_url)
+        if body is not None:
+            return body
+
+    text, full_text = _entry_text(entry)
+    return EntryBody(
+        text=text,
+        full_text=full_text,
+        html=_entry_html(entry, base_url),
+    )
+
+
+def _is_hacker_news_entry(entry: Any, feed_url: str) -> bool:
+    hosts = {
+        (urlsplit(feed_url).hostname or "").lower(),
+        (urlsplit(str(entry.get("link") or "")).hostname or "").lower(),
+    }
+    if not hosts & _HN_HOSTS:
+        return False
+    raw = str(entry.get("summary") or entry.get("description") or "")
+    return any(
+        marker in raw
+        for marker in ("Article URL:", "Comments URL:", "Points:", "# Comments:")
+    )
+
+
+def _hacker_news_body(entry: Any, base_url: str) -> EntryBody | None:
+    raw = str(entry.get("summary") or entry.get("description") or "")
+    if not raw.strip():
+        return None
+
+    separator = _HN_SEPARATOR.search(raw)
+    if separator is None:
+        body_html = ""
+        meta_html = raw
+    else:
+        body_html = raw[: separator.start()]
+        meta_html = raw[separator.end() :]
+
+    meta_text = html_to_text(meta_html)
+    if not any(
+        marker in meta_text
+        for marker in ("Article URL:", "Comments URL:", "Points:", "# Comments:")
+    ):
+        return None
+
+    discussion_url = _hn_url(_HN_COMMENTS_URL.search(meta_text), base_url)
+    if discussion_url is None:
+        link = normalize_url(urljoin(base_url, str(entry.get("link") or "")))
+        if (urlsplit(link).hostname or "").lower() == "news.ycombinator.com":
+            discussion_url = link
+
+    text = html_to_text(body_html).strip()
+    markup = sanitize_html(body_html, base_url=base_url) if text else None
+    if markup:
+        text = html_to_text(markup).strip() or text
+
+    return EntryBody(
+        text=text,
+        full_text=None,
+        html=markup if text else None,
+        discussion_url=discussion_url,
+        points=_hn_number(_HN_POINTS.search(meta_text)),
+        comment_count=_hn_number(_HN_COMMENT_COUNT.search(meta_text)),
+    )
+
+
+def _hn_url(match: re.Match[str] | None, base_url: str) -> str | None:
+    if match is None:
+        return None
+    value = match.group(1).strip().rstrip(_URL_TRAILING)
+    candidate = normalize_url(urljoin(base_url, value))
+    parts = urlsplit(candidate)
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        return None
+    return candidate
+
+
+def _hn_number(match: re.Match[str] | None) -> int | None:
+    if match is None:
+        return None
+    try:
+        value = int(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    return max(0, min(value, 2_147_483_647))
 
 
 def _entry_html(entry: Any, base_url: str) -> str | None:

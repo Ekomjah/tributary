@@ -13,9 +13,10 @@ from .api import feeds, items, labels, me, pipes, refine, runs, search_source, s
 from .api.security import get_current_user
 from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
-from .observability import init_sentry
+from .observability import configure_logging, init_sentry
 from .schemas import HealthOut
 from .services import pipe_runs
+from .services.feeds import recover_interrupted_ingests
 from .services.quotas import LimitExceeded
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ async def _limit_exceeded_handler(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
+    configure_logging(resolved_settings)
     init_sentry(resolved_settings)
 
     @asynccontextmanager
@@ -49,6 +51,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         reaped = pipe_runs.reap_interrupted_runs(app.state.session_factory)
         if reaped:
             logger.warning("Marked %d interrupted pipe run(s) as failed", reaped)
+        interrupted = recover_interrupted_ingests(app.state.session_factory)
+        if interrupted:
+            logger.warning(
+                "Marked %d interrupted feed ingestion(s) as partial",
+                interrupted,
+            )
         try:
             yield
         finally:

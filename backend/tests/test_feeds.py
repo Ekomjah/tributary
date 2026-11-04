@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -887,3 +888,380 @@ def test_fetch_stops_after_too_many_redirects(settings: Settings, db_session: Se
     assert result.error is not None
     assert "redirect" in result.error.lower()
     assert db_session.scalar(select(func.count()).select_from(Feed)) == 0
+
+
+HN_SELF_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><title>Hacker News: Front Page</title>
+  <item>
+    <title>Show HN: A self post</title>
+    <link>https://example.com/self-post</link>
+    <guid>hn-self</guid>
+    <description><![CDATA[
+      <p>The first paragraph of the self post.</p>
+      <p>The second paragraph, which belongs in the reader.</p>
+      <hr>
+      <p>Comments URL: <a href="https://news.ycombinator.com/item?id=50300001">https://news.ycombinator.com/item?id=50300001</a></p>
+      <p>Points: 285</p>
+      <p># Comments: 90</p>
+    ]]></description>
+  </item>
+</channel></rss>
+"""
+
+HN_LINK_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><title>Hacker News: Front Page</title>
+  <item>
+    <title>An external story</title>
+    <link>https://example.com/story</link>
+    <guid>hn-link</guid>
+    <description><![CDATA[
+      <p>Article URL: <a href="https://example.com/story">https://example.com/story</a></p>
+      <p>Comments URL: <a href="https://news.ycombinator.com/item?id=50300002">https://news.ycombinator.com/item?id=50300002</a></p>
+      <p>Points: 71</p>
+      <p># Comments: 12</p>
+    ]]></description>
+  </item>
+</channel></rss>
+"""
+
+
+def test_hn_self_post_stores_only_the_body_and_metadata(
+    settings: Settings, db_session: Session
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=HN_SELF_RSS.encode())
+
+    with mock_client(handler) as client:
+        owned_fetch(db_session, "https://hnrss.org/frontpage", client=client)
+        db_session.commit()
+
+    item = db_session.scalar(select(Item))
+    assert item is not None
+    assert item.content == (
+        "The first paragraph of the self post.\n\n"
+        "The second paragraph, which belongs in the reader."
+    )
+    assert item.content_html is not None
+    assert "Comments URL" not in item.content
+    assert "Comments URL" not in item.content_html
+    assert "Points" not in item.content_html
+    assert item.content_full is None
+    assert item.discussion_url == "https://news.ycombinator.com/item?id=50300001"
+    assert item.points == 285
+    assert item.comment_count == 90
+
+
+def test_hn_link_post_does_not_store_boilerplate_as_its_body(
+    settings: Settings, db_session: Session
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=HN_LINK_RSS.encode())
+
+    with mock_client(handler) as client:
+        owned_fetch(db_session, "https://hnrss.org/frontpage", client=client)
+        db_session.commit()
+
+    item = db_session.scalar(select(Item))
+    assert item is not None
+    assert item.content == ""
+    assert item.content_html is None
+    assert item.discussion_url == "https://news.ycombinator.com/item?id=50300002"
+    assert item.points == 71
+    assert item.comment_count == 12
+
+
+def test_short_content_encoded_is_trusted_as_full_text(
+    settings: Settings, db_session: Session
+) -> None:
+    rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+      <channel><title>Short Feed</title>
+        <item><title>Short post</title><link>https://example.com/short</link>
+        <guid>short-post</guid><description>Feed summary.</description>
+        <content:encoded><![CDATA[<p>Short but complete.</p>]]></content:encoded></item>
+      </channel></rss>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=rss.encode())
+
+    with mock_client(handler) as client:
+        owned_fetch(db_session, "https://example.com/short.xml", client=client)
+        db_session.commit()
+
+    item = db_session.scalar(select(Item))
+    assert item is not None
+    assert item.content == "Short but complete."
+    assert item.content_full == "Short but complete."
+    assert item.fetch_status == "ok"
+
+
+def dated_rss(count: int) -> str:
+    """Build a feed with newest entries last in the XML document."""
+
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    entries = []
+    for index in range(count):
+        published = start + timedelta(hours=index)
+        entries.append(
+            "<item>"
+            f"<title>Entry {index:02d}</title>"
+            f"<link>https://example.com/posts/{index}</link>"
+            f"<guid>entry-{index}</guid>"
+            f"<pubDate>{format_datetime(published, usegmt=True)}</pubDate>"
+            f"<description>Body {index}.</description>"
+            "</item>"
+        )
+    # Reverse the document order so ingestion has to sort by date itself.
+    entries.reverse()
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<rss version="2.0"><channel><title>Batch Feed</title>'
+        + "".join(entries)
+        + "</channel></rss>"
+    )
+
+
+def test_deferred_fetch_stores_the_newest_batch_first(
+    settings: Settings,
+    db_session: Session,
+) -> None:
+    payload = dated_rss(45)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload.encode())
+
+    with mock_client(handler) as client:
+        result = owned_fetch(
+            db_session,
+            "https://example.com/batch.xml",
+            client=client,
+            defer=True,
+        )
+        db_session.commit()
+
+    assert result.ok is True
+    assert result.new_items == feeds.BATCH_SIZE
+    assert result.total_entries == 45
+    assert result.pending_entries == 45 - feeds.BATCH_SIZE
+    assert result.continuation is not None
+
+    feed = db_session.scalar(select(Feed))
+    assert feed is not None
+    assert feed.ingest_state == "pending"
+    assert feed.ingest_total == 45
+    assert feed.ingest_processed == feeds.BATCH_SIZE
+    assert feed.ingest_token == result.continuation.token
+    assert feed.ingest_error is None
+
+    stored = db_session.scalars(
+        select(Item).order_by(Item.published.desc())
+    ).all()
+    assert [item.title for item in stored] == [
+        f"Entry {index:02d}"
+        for index in range(44, 44 - feeds.BATCH_SIZE, -1)
+    ]
+    assert [entry["title"] for entry in result.continuation.entries[:2]] == [
+        "Entry 24",
+        "Entry 23",
+    ]
+
+
+def test_run_ingest_job_stores_remaining_entries_in_batches(
+    settings: Settings,
+    db_session: Session,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = dated_rss(45)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload.encode())
+
+    with mock_client(handler) as client:
+        result = owned_fetch(
+            db_session,
+            "https://example.com/batch.xml",
+            client=client,
+            defer=True,
+        )
+        db_session.commit()
+
+    assert result.continuation is not None
+
+    batch_sizes: list[int] = []
+    original_store = feeds.store_entries
+
+    def counting_store(session, feed, entries, **kwargs):
+        batch_sizes.append(len(entries))
+        return original_store(session, feed, entries, **kwargs)
+
+    factory_calls = 0
+
+    def counting_factory():
+        nonlocal factory_calls
+        factory_calls += 1
+        return session_factory()
+
+    monkeypatch.setattr(feeds, "store_entries", counting_store)
+
+    feeds.run_ingest_job(counting_factory, result.continuation)
+
+    assert factory_calls == 2
+    assert batch_sizes == [20, 5]
+
+    db_session.expire_all()
+    feed = db_session.scalar(select(Feed))
+    assert feed is not None
+    assert feed.ingest_state == "ready"
+    assert feed.ingest_total == 45
+    assert feed.ingest_processed == 45
+    assert feed.ingest_token is None
+    assert feed.ingest_error is None
+    assert db_session.scalar(select(func.count()).select_from(Item)) == 45
+
+
+def test_ingest_job_stops_after_a_newer_refresh(
+    settings: Settings,
+    db_session: Session,
+    session_factory: sessionmaker[Session],
+) -> None:
+    payload = dated_rss(45)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload.encode())
+
+    with mock_client(handler) as client:
+        result = owned_fetch(
+            db_session,
+            "https://example.com/batch.xml",
+            client=client,
+            defer=True,
+        )
+        db_session.commit()
+
+    assert result.continuation is not None
+
+    feed = db_session.scalar(select(Feed))
+    assert feed is not None
+    feed.ingest_token = "newer-token"
+    db_session.commit()
+
+    feeds.run_ingest_job(session_factory, result.continuation)
+
+    db_session.expire_all()
+    feed = db_session.scalar(select(Feed))
+    assert feed is not None
+    assert feed.ingest_token == "newer-token"
+    assert feed.ingest_state == "pending"
+    assert db_session.scalar(select(func.count()).select_from(Item)) == 20
+
+
+def test_recover_interrupted_ingests_marks_them_partial(
+    session_factory: sessionmaker[Session],
+    local_user: User,
+) -> None:
+    with session_factory() as session:
+        session.add_all(
+            [
+                Feed(
+                    owner_id=local_user.id,
+                    url="https://example.com/pending.xml",
+                    title="Pending",
+                    ingest_state="pending",
+                    ingest_total=100,
+                    ingest_processed=40,
+                    ingest_token="token",
+                    etag='"v1"',
+                    last_modified="Tue, 27 Oct 2026 10:00:00 GMT",
+                ),
+                Feed(
+                    owner_id=local_user.id,
+                    url="https://example.com/ready.xml",
+                    title="Ready",
+                ),
+            ]
+        )
+        session.commit()
+
+    assert feeds.recover_interrupted_ingests(session_factory) == 1
+
+    with session_factory() as session:
+        pending = session.scalar(
+            select(Feed).where(Feed.url == "https://example.com/pending.xml")
+        )
+        ready = session.scalar(
+            select(Feed).where(Feed.url == "https://example.com/ready.xml")
+        )
+        assert pending is not None
+        assert pending.ingest_state == "partial"
+        assert pending.ingest_token is None
+        assert pending.ingest_error is not None
+        assert pending.etag is None
+        assert pending.last_modified is None
+        assert ready is not None
+        assert ready.ingest_state == "ready"
+
+
+def test_partial_feed_skips_conditional_headers(
+    settings: Settings,
+    db_session: Session,
+    local_user: User,
+) -> None:
+    feed = Feed(
+        owner_id=local_user.id,
+        url="https://example.com/partial.xml",
+        title="Partial",
+        ingest_state="partial",
+        etag='"v1"',
+        last_modified="Tue, 27 Oct 2026 10:00:00 GMT",
+    )
+    db_session.add(feed)
+    db_session.commit()
+
+    seen: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200, content=RSS.encode())
+
+    with mock_client(handler) as client:
+        result = owned_fetch(
+            db_session,
+            "https://example.com/partial.xml",
+            client=client,
+        )
+        db_session.commit()
+
+    assert result.ok is True
+    assert seen
+    assert "if-none-match" not in seen[0]
+    assert "if-modified-since" not in seen[0]
+
+    db_session.expire_all()
+    feed = db_session.scalar(select(Feed))
+    assert feed is not None
+    assert feed.ingest_state == "ready"
+    assert feed.ingest_processed == 2
+    assert db_session.scalar(select(func.count()).select_from(Item)) == 2
+
+
+def test_sort_entries_newest_first_keeps_undated_order() -> None:
+    rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0"><channel><title>Mixed Feed</title>
+      <item><title>undated-a</title><guid>a</guid></item>
+      <item><title>old</title><guid>old</guid>
+        <pubDate>Tue, 27 Oct 2026 10:00:00 GMT</pubDate></item>
+      <item><title>undated-b</title><guid>b</guid></item>
+      <item><title>new</title><guid>new</guid>
+        <pubDate>Wed, 28 Oct 2026 10:00:00 GMT</pubDate></item>
+    </channel></rss>"""
+
+    parsed = parse_feed(rss.encode())
+    ordered = feeds._sort_entries_newest_first(list(parsed.entries))
+
+    assert [entry["title"] for entry in ordered] == [
+        "new",
+        "old",
+        "undated-a",
+        "undated-b",
+    ]

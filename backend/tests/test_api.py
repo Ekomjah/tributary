@@ -255,6 +255,110 @@ def test_refresh_feed_uses_the_feed_service(
     assert items["total"] == 2
 
 
+def test_refresh_feed_schedules_the_deferred_ingest(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    feed = seed_feed(db_session)
+    job = feeds.IngestJob(
+        feed_id=feed.id,
+        owner_id=feed.owner_id,
+        feed_url=feed.url,
+        token="token-1",
+        entries=[],
+    )
+    scheduled: list[feeds.IngestJob] = []
+
+    def fake_fetch(
+        session,
+        url,
+        *,
+        owner_id,
+        client,
+        min_full_chars=500,
+        defer=False,
+    ):
+        assert defer is True
+        return feeds.FetchResult(
+            url=url,
+            feed_id=feed.id,
+            title=feed.title,
+            new_items=20,
+            total_entries=45,
+            pending_entries=25,
+            continuation=job,
+        )
+
+    def fake_run(factory, received):
+        scheduled.append(received)
+
+    monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
+    monkeypatch.setattr(feeds, "run_ingest_job", fake_run)
+
+    response = client.post(f"/api/feeds/{feed.id}/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["new_items"] == 20
+    assert body["total_entries"] == 45
+    assert body["pending_entries"] == 25
+    assert scheduled == [job]
+
+
+def test_refresh_feed_completes_the_deferred_ingest(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    feed = seed_feed(db_session)
+    entries = "".join(
+        "<item>"
+        f"<title>Post {index:02d}</title>"
+        f"<link>https://example.com/posts/{index}</link>"
+        f"<guid>post-{index}</guid>"
+        f"<description>Body {index}.</description>"
+        "</item>"
+        for index in range(45)
+    )
+    rss = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<rss version="2.0"><channel><title>Large API Feed</title>'
+        + entries
+        + "</channel></rss>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=rss.encode())
+
+    monkeypatch.setattr(feeds, "make_client", lambda settings: mock_client(handler))
+
+    response = client.post(f"/api/feeds/{feed.id}/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["new_items"] == feeds.BATCH_SIZE
+    assert body["total_entries"] == 45
+    assert body["pending_entries"] == 45 - feeds.BATCH_SIZE
+
+    # TestClient waits for BackgroundTasks, so the remaining entries are stored.
+    items = client.get(f"/api/items?feed_id={feed.id}&limit=100").json()
+    assert items["total"] == 45
+    # Undated entries keep the feed's order across every background batch.
+    assert [item["title"] for item in items["items"]] == [
+        f"Post {index:02d}" for index in range(45)
+    ]
+
+    feed_body = next(
+        entry
+        for entry in client.get("/api/feeds").json()
+        if entry["id"] == feed.id
+    )
+    assert feed_body["ingest_state"] == "ready"
+    assert feed_body["ingest_total"] == 45
+    assert feed_body["ingest_processed"] == 45
+
+
 def test_refresh_all_isolates_a_dead_feed(
     client: TestClient,
     db_session: Session,
@@ -679,7 +783,15 @@ def test_refresh_all_only_touches_the_current_tenant(
 
     called: list[tuple[str, int]] = []
 
-    def fake_fetch(session, url, *, owner_id, client, min_full_chars=500):
+    def fake_fetch(
+        session,
+        url,
+        *,
+        owner_id,
+        client,
+        min_full_chars=500,
+        defer=False,
+    ):
         called.append((url, owner_id))
         return feeds.FetchResult(
             url=url,
