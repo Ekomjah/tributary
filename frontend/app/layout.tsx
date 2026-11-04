@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Arimo, Open_Sans, Roboto_Mono } from "next/font/google";
+import { Arimo, Geist, Open_Sans } from "next/font/google";
 import { connection } from "next/server";
 
 import { readAuthRuntimeConfig } from "@/lib/auth-config";
@@ -20,8 +20,8 @@ const openSans = Open_Sans({
   display: "swap",
 });
 
-const robotoMono = Roboto_Mono({
-  variable: "--font-roboto-mono",
+const geist = Geist({
+  variable: "--font-geist",
   subsets: ["latin"],
   display: "swap",
 });
@@ -45,7 +45,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${arimo.variable} ${openSans.variable} ${robotoMono.variable}`}
+      className={`${arimo.variable} ${openSans.variable} ${geist.variable}`}
     >
       <body>
         <Providers auth={auth}>{children}</Providers>
