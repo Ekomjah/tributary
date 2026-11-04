@@ -20,6 +20,8 @@ const OVERLAY_LINGER_MS = 1500;
 interface Job {
   /** Last server-confirmed item: the fail-safe we roll back to. */
   base: Item;
+  client: QueryClient;
+  onFailure?: (failure: ItemMutationFailure) => void;
   inflight?: ItemIntent;
   queued?: ItemIntent;
   lastIntent?: ItemIntent;
@@ -34,28 +36,16 @@ export interface ItemMutationFailure {
   retry: () => void;
 }
 
-interface Configuration {
+export interface ItemMutationContext {
   queryClient: QueryClient;
   onFailure?: (failure: ItemMutationFailure) => void;
 }
 
-let configuration: Configuration | null = null;
 /** Bumped on sign-out so responses cannot write into a cleared cache. */
 let generation = 0;
 
 const jobs = new Map<number, Job>();
 const overlayTimers = new Map<number, ReturnType<typeof setTimeout>>();
-
-export function configureItemMutations(config: Configuration): () => void {
-  configuration = config;
-  return () => {
-    if (configuration === config) {
-      // Keep the query client: a request started by the previous shell may
-      // still settle after a remount. Only stop reporting failures.
-      configuration = { queryClient: config.queryClient };
-    }
-  };
-}
 
 /** Drop every optimistic layer; used when the session ends. */
 export function resetItemMutations(): void {
@@ -69,49 +59,31 @@ export function resetItemMutations(): void {
 }
 
 function writeOptimistic(job: Job): void {
-  const config = configuration;
-  if (!config) {
-    return;
-  }
-
   const itemId = job.base.id;
   const intent = mergeIntents(job.inflight, job.queued);
   if (!intent) {
     clearItemOverlay(itemId);
-    writeItemToCaches(config.queryClient, itemId, job.base);
+    writeItemToCaches(job.client, itemId, job.base);
     return;
   }
 
   setItemOverlay(itemId, intent);
-  writeItemToCaches(
-    config.queryClient,
-    itemId,
-    applyIntent(job.base, intent),
-  );
+  writeItemToCaches(job.client, itemId, applyIntent(job.base, intent));
 }
 
-function resync(itemId: number): void {
-  const client = configuration?.queryClient;
-  if (!client) {
-    return;
-  }
+function resync(client: QueryClient, itemId: number): void {
   void client.invalidateQueries({ queryKey: ["item", itemId], exact: true });
   void client.invalidateQueries({ queryKey: ["items"] });
   void client.invalidateQueries({ queryKey: ["counts"] });
 }
 
 function rollback(job: Job): void {
-  const config = configuration;
-  if (!config) {
-    return;
-  }
-
   job.inflight = undefined;
   job.queued = undefined;
   job.lastIntent = undefined;
   clearItemOverlay(job.base.id);
-  writeItemToCaches(config.queryClient, job.base.id, job.base);
-  resync(job.base.id);
+  writeItemToCaches(job.client, job.base.id, job.base);
+  resync(job.client, job.base.id);
 }
 
 function scheduleOverlayClear(itemId: number): void {
@@ -131,14 +103,17 @@ function scheduleOverlayClear(itemId: number): void {
   );
 }
 
-function retryFailed(base: Item, intent: ItemIntent): void {
-  if (jobs.has(base.id)) {
-    return;
-  }
-  void enqueueItemMutation(base, intent);
+function retryFailed(
+  base: Item,
+  intent: ItemIntent,
+  context: ItemMutationContext,
+): void {
+  // Fold the retry into any job that started since the banner appeared; its
+  // absolute values make merging safe.
+  void enqueueItemMutation(base, intent, context);
 }
 
-async function drain(job: Job, config: Configuration): Promise<void> {
+async function drain(job: Job): Promise<void> {
   const itemId = job.base.id;
   const taskGeneration = generation;
 
@@ -164,7 +139,14 @@ async function drain(job: Job, config: Configuration): Promise<void> {
           return;
         }
 
+        const context: ItemMutationContext = {
+          queryClient: job.client,
+          onFailure: job.onFailure,
+        };
         const failedBase = job.base;
+        // A click that arrived while this attempt was in flight is part of the
+        // user's latest desired state, so the retry must carry it too.
+        const failedIntent = mergeIntents(intent, job.queued);
         const silent = job.silent;
         rollback(job);
         jobs.delete(itemId);
@@ -173,10 +155,11 @@ async function drain(job: Job, config: Configuration): Promise<void> {
           return;
         }
 
-        config.onFailure?.({
+        job.onFailure?.({
           itemId,
           error,
-          retry: () => retryFailed(failedBase, intent),
+          retry: () =>
+            retryFailed(failedBase, failedIntent ?? intent, context),
         });
         return;
       }
@@ -201,17 +184,15 @@ async function drain(job: Job, config: Configuration): Promise<void> {
 /**
  * Apply an intent immediately, then persist it with retries. Clicks made while
  * a request is in flight are merged into one follow-up request.
+ *
+ * The query client is passed per call so a child effect (such as auto
+ * mark-as-read) can optimistically update before the shell's own effects run.
  */
 export function enqueueItemMutation(
   item: Item,
   intent: ItemIntent,
-  options: { silent?: boolean } = {},
+  context: ItemMutationContext & { silent?: boolean },
 ): Promise<void> {
-  const config = configuration;
-  if (!config) {
-    return Promise.resolve();
-  }
-
   const itemId = item.id;
   const timer = overlayTimers.get(itemId);
   if (timer) {
@@ -222,26 +203,28 @@ export function enqueueItemMutation(
   let job = jobs.get(itemId);
   if (!job) {
     job = {
-      base: readCachedItem(config.queryClient, itemId) ?? item,
+      base: readCachedItem(context.queryClient, itemId) ?? item,
+      client: context.queryClient,
+      onFailure: context.onFailure,
       inflight: intent,
       running: false,
       done: null,
-      silent: options.silent ?? false,
+      silent: context.silent ?? false,
     };
     jobs.set(itemId, job);
   } else if (job.running) {
     job.queued = mergeIntents(job.queued, intent);
-    job.silent = job.silent && (options.silent ?? false);
+    job.silent = job.silent && (context.silent ?? false);
   } else {
     job.inflight = mergeIntents(job.inflight, intent);
-    job.silent = job.silent && (options.silent ?? false);
+    job.silent = job.silent && (context.silent ?? false);
   }
 
   writeOptimistic(job);
 
   if (!job.running) {
     job.running = true;
-    job.done = drain(job, config);
+    job.done = drain(job);
   }
   return job.done ?? Promise.resolve();
 }

@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
-  configureItemMutations,
   enqueueItemMutation,
   type ItemMutationFailure,
 } from "@/lib/item-mutations";
@@ -22,20 +21,26 @@ export function useItemMutations(options: {
   const queryClient = useQueryClient();
   const { onError } = options;
 
-  useEffect(() => {
-    return configureItemMutations({
-      queryClient,
-      onFailure: (failure: ItemMutationFailure) => {
-        onError(failure.error, failure.retry);
-      },
-    });
-  }, [onError, queryClient]);
+  const onFailure = useCallback(
+    (failure: ItemMutationFailure) => {
+      onError(failure.error, failure.retry);
+    },
+    [onError],
+  );
 
   const patchItem = useCallback(
     (item: Item, patch: ItemUpdate, patchOptions?: PatchItemOptions) => {
-      void enqueueItemMutation(item, { patch }, { silent: patchOptions?.silent });
+      void enqueueItemMutation(
+        item,
+        { patch },
+        {
+          queryClient,
+          onFailure,
+          silent: patchOptions?.silent,
+        },
+      );
     },
-    [],
+    [onFailure, queryClient],
   );
 
   const toggleStar = useCallback(
@@ -64,22 +69,29 @@ export function useItemMutations(options: {
     [patchItem],
   );
 
-  const toggleLabel = useCallback((item: Item, label: Label) => {
-    if (label.pending || label.id < 0) {
-      return;
-    }
+  const toggleLabel = useCallback(
+    (item: Item, label: Label) => {
+      if (label.pending || label.id < 0) {
+        return;
+      }
 
-    const current = optimisticItem(item);
-    const attached = current.labels.some((entry) => entry.id === label.id);
-    const labels = attached
-      ? current.labels.filter((entry) => entry.id !== label.id)
-      : [...current.labels, label];
+      const current = optimisticItem(item);
+      const attached = current.labels.some((entry) => entry.id === label.id);
+      const labels = attached
+        ? current.labels.filter((entry) => entry.id !== label.id)
+        : [...current.labels, label];
 
-    void enqueueItemMutation(current, {
-      patch: { label_ids: labels.map((entry) => entry.id) },
-      labels,
-    });
-  }, []);
+      void enqueueItemMutation(
+        current,
+        {
+          patch: { label_ids: labels.map((entry) => entry.id) },
+          labels,
+        },
+        { queryClient, onFailure },
+      );
+    },
+    [onFailure, queryClient],
+  );
 
   return { patchItem, toggleStar, toggleRead, toggleDecision, toggleLabel };
 }

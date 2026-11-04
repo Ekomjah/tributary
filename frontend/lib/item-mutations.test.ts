@@ -3,9 +3,9 @@ import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 
 import { api, ApiError } from "./api";
 import {
-  configureItemMutations,
   enqueueItemMutation,
   resetItemMutations,
+  type ItemMutationContext,
   type ItemMutationFailure,
 } from "./item-mutations";
 import { applyIntent } from "./optimistic";
@@ -92,13 +92,16 @@ function readCounts(): Counts | undefined {
   return client.getQueryData<Counts>(["counts", "7"]);
 }
 
+function context(): ItemMutationContext {
+  return {
+    queryClient: client,
+    onFailure: (failure) => failures.push(failure),
+  };
+}
+
 beforeEach(() => {
   client = new QueryClient();
   failures = [];
-  configureItemMutations({
-    queryClient: client,
-    onFailure: (failure) => failures.push(failure),
-  });
 });
 
 afterEach(() => {
@@ -114,7 +117,11 @@ describe("enqueueItemMutation", () => {
     const request = deferred<Item>();
     vi.mocked(api.updateItem).mockReturnValueOnce(request.promise);
 
-    const done = enqueueItemMutation(item, { patch: { starred: true } });
+    const done = enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
 
     expect(cachedItem()?.starred).toBe(true);
     expect(api.updateItem).toHaveBeenCalledWith(1, { starred: true });
@@ -133,8 +140,16 @@ describe("enqueueItemMutation", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
 
-    const done = enqueueItemMutation(item, { patch: { starred: true } });
-    const alsoDone = enqueueItemMutation(item, { patch: { is_read: true } });
+    const done = enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
+    const alsoDone = enqueueItemMutation(
+      item,
+      { patch: { is_read: true } },
+      context(),
+    );
 
     expect(cachedItem()?.starred).toBe(true);
     expect(cachedItem()?.is_read).toBe(true);
@@ -161,7 +176,11 @@ describe("enqueueItemMutation", () => {
       new ApiError("The API refused that change.", 422),
     );
 
-    await enqueueItemMutation(item, { patch: { starred: true } });
+    await enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
 
     expect(cachedItem()?.starred).toBe(false);
     expect(failures).toHaveLength(1);
@@ -176,6 +195,40 @@ describe("enqueueItemMutation", () => {
     await vi.waitFor(() => expect(cachedItem()?.starred).toBe(true));
   });
 
+  it("retries the latest state when a click queued behind a failure", async () => {
+    const item = makeItem(1);
+    seed(item);
+    const first = deferred<Item>();
+    vi.mocked(api.updateItem).mockReturnValueOnce(first.promise);
+
+    const done = enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
+    const alsoDone = enqueueItemMutation(
+      item,
+      { patch: { is_read: true } },
+      context(),
+    );
+
+    first.reject(new ApiError("The API refused that change.", 422));
+    await Promise.all([done, alsoDone]);
+
+    expect(cachedItem()).toMatchObject({ starred: false, is_read: false });
+    expect(failures).toHaveLength(1);
+
+    const updated = { ...item, starred: true, is_read: true };
+    vi.mocked(api.updateItem).mockResolvedValueOnce(updated);
+    failures[0]?.retry();
+
+    await vi.waitFor(() => expect(cachedItem()).toEqual(updated));
+    expect(vi.mocked(api.updateItem).mock.calls[1]).toEqual([
+      1,
+      { is_read: true, starred: true },
+    ]);
+  });
+
   it("rolls back quietly for auto mark-as-read", async () => {
     const item = makeItem(1);
     seed(item);
@@ -183,9 +236,11 @@ describe("enqueueItemMutation", () => {
       new ApiError("The API refused that change.", 422),
     );
 
-    await enqueueItemMutation(item, { patch: { is_read: true } }, {
-      silent: true,
-    });
+    await enqueueItemMutation(
+      item,
+      { patch: { is_read: true } },
+      { ...context(), silent: true },
+    );
 
     expect(cachedItem()?.is_read).toBe(false);
     expect(failures).toHaveLength(0);
@@ -197,10 +252,14 @@ describe("enqueueItemMutation", () => {
     seed(item);
     vi.mocked(api.updateItem).mockResolvedValueOnce({ ...item, labels });
 
-    await enqueueItemMutation(item, {
-      patch: { label_ids: [3] },
-      labels,
-    });
+    await enqueueItemMutation(
+      item,
+      {
+        patch: { label_ids: [3] },
+        labels,
+      },
+      context(),
+    );
 
     expect(api.updateItem).toHaveBeenCalledWith(1, { label_ids: [3] });
     expect(cachedItem()?.labels).toEqual(labels);
@@ -217,7 +276,11 @@ describe("enqueueItemMutation", () => {
     const request = deferred<Item>();
     vi.mocked(api.updateItem).mockReturnValueOnce(request.promise);
 
-    const done = enqueueItemMutation(item, { patch: { starred: true } });
+    const done = enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
     expect(readCounts()?.views.starred).toBe(1);
 
     request.reject(new ApiError("The API refused that change.", 422));
@@ -237,7 +300,11 @@ describe("enqueueItemMutation", () => {
     });
     vi.mocked(api.updateItem).mockResolvedValueOnce(updated);
 
-    await enqueueItemMutation(item, { patch: { starred: true } });
+    await enqueueItemMutation(
+      item,
+      { patch: { starred: true } },
+      context(),
+    );
 
     expect(cachedItem()).toEqual(updated);
   });
