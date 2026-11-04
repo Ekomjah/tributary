@@ -308,6 +308,9 @@ describe("withArticle", () => {
     content_full: null,
     content_fetched_at: null,
     fetch_status: null,
+    discussion_url: null,
+    points: null,
+    comment_count: null,
     shared_by: null,
     shared_at: null,
     origin_feed_title: null,
@@ -331,6 +334,9 @@ describe("withArticle", () => {
     content_full: "Full article",
     content_fetched_at: "2026-01-02T00:00:00Z",
     fetch_status: "ok",
+    discussion_url: null,
+    points: null,
+    comment_count: null,
   };
 
   it("merges the fetched article without losing item state", () => {

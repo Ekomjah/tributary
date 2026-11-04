@@ -38,6 +38,7 @@ interface ArticleViewProps {
   onToggleDecision: (item: Item, decision: Decision) => void;
   onToggleLabel: (item: Item, label: Label) => void;
   onSelectFeed: (feedId: number) => void;
+  onRetryFullText?: () => void;
   onShare?: (item: Item) => void;
 }
 
@@ -56,6 +57,7 @@ export default function ArticleView({
   onToggleDecision,
   onToggleLabel,
   onSelectFeed,
+  onRetryFullText,
   onShare,
 }: ArticleViewProps) {
   const text = item.content_full ?? item.content;
@@ -174,6 +176,27 @@ export default function ArticleView({
                 <span className="text-muted">By {item.author}</span>
               </>
             )}
+            {item.discussion_url && (
+              <>
+                <span aria-hidden="true">·</span>
+                <a
+                  href={item.discussion_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-bold text-accent hover:text-accent-dark hover:underline"
+                >
+                  {item.comment_count != null
+                    ? `${item.comment_count} comments`
+                    : "Discussion"}
+                </a>
+              </>
+            )}
+            {item.points != null && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{item.points} points</span>
+              </>
+            )}
             {readingTime > 0 && (
               <>
                 <span aria-hidden="true">·</span>
@@ -245,26 +268,12 @@ export default function ArticleView({
             </Button>
           )}
 
-          {gallery.length > 0 && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setGalleryIndex(0)}
-            >
-              <Images className="size-3.5" />
-              Images ({gallery.length})
-            </Button>
-          )}
-
           {item.link && (
             <Button
               variant="outline"
               size="sm"
               nativeButton={false}
-              render={
-                <a href={item.link} target="_blank" rel="noreferrer" />
-              }
+              render={<a href={item.link} target="_blank" rel="noreferrer" />}
             >
               <ExternalLink className="size-3.5" />
               Open original
@@ -275,6 +284,7 @@ export default function ArticleView({
         <ArticleBody
           item={item}
           fetching={fetching}
+          onRetry={onRetryFullText}
           onGalleryChange={handleGalleryChange}
           onOpenGallery={setGalleryIndex}
         />
@@ -319,8 +329,8 @@ export default function ArticleView({
             </Button>
           </div>
           <p className="mt-2 flex items-center gap-1.5 text-[11px] text-faint">
-            <Sparkles className="size-3.5" aria-hidden="true" />
-            A local training signal. Nothing leaves this machine.
+            <Sparkles className="size-3.5" aria-hidden="true" />A local training
+            signal. Nothing leaves this machine.
           </p>
         </div>
 
