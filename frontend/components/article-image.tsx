@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -22,6 +23,8 @@ interface ArticleImageProps {
   caption?: ReactNode;
   className?: string;
   eager?: boolean;
+  onActivate?: () => void;
+  activateLabel?: string;
 }
 
 /**
@@ -35,9 +38,12 @@ export function ArticleImage({
   caption,
   className,
   eager = false,
+  onActivate,
+  activateLabel,
 }: ArticleImageProps) {
   const [state, setState] = useState<ImageState>("loading");
   const imageRef = useRef<HTMLImageElement>(null);
+  const activatable = Boolean(onActivate) && state !== "error";
 
   useEffect(() => {
     const image = imageRef.current;
@@ -52,9 +58,31 @@ export function ArticleImage({
     return () => cancelAnimationFrame(frame);
   }, [src]);
 
+  function handleActivateKey(event: ReactKeyboardEvent<HTMLSpanElement>) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    onActivate?.();
+  }
+
   return (
     <figure className={className}>
-      <span className="article-image-frame" data-image-state={state}>
+      <span
+        className="article-image-frame"
+        data-image-state={state}
+        data-gallery-trigger={activatable ? "true" : undefined}
+        role={activatable ? "button" : undefined}
+        tabIndex={activatable ? 0 : undefined}
+        aria-label={
+          activatable
+            ? activateLabel || `View image: ${alt || "article image"}`
+            : undefined
+        }
+        aria-haspopup={activatable ? "dialog" : undefined}
+        onClick={activatable ? onActivate : undefined}
+        onKeyDown={activatable ? handleActivateKey : undefined}
+      >
         {/* Remote covers come from arbitrary publishers; next/image needs a
             fixed host allowlist, so the sanitized URL is used directly. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -87,12 +115,22 @@ export function ArticleImage({
   );
 }
 
+interface ArticleImagesOptions {
+  gallery?: boolean;
+}
+
 /**
  * Sanitized feed HTML is injected with dangerouslySetInnerHTML, so its images
  * cannot use a React onLoad handler. Wrap each one after render and track its
  * state so the same placeholder and alt fallback apply to inline images.
+ *
+ * With `gallery` enabled, large frames also become keyboard triggers for the
+ * article image viewer. Small inline icons stay non-interactive.
  */
-export function useArticleImages(html: string) {
+export function useArticleImages(
+  html: string,
+  { gallery = false }: ArticleImagesOptions = {},
+) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useIsomorphicLayoutEffect(() => {
@@ -102,15 +140,18 @@ export function useArticleImages(html: string) {
     }
 
     const cleanups = Array.from(container.querySelectorAll("img")).map(
-      enhanceInlineImage,
+      (image) => enhanceInlineImage(image, gallery),
     );
     return () => cleanups.forEach((cleanup) => cleanup());
-  }, [html]);
+  }, [gallery, html]);
 
   return containerRef;
 }
 
-function enhanceInlineImage(image: HTMLImageElement): () => void {
+function enhanceInlineImage(
+  image: HTMLImageElement,
+  gallery: boolean,
+): () => void {
   if (image.closest(".article-image-frame")) {
     return () => {};
   }
@@ -169,10 +210,54 @@ function enhanceInlineImage(image: HTMLImageElement): () => void {
   parent.insertBefore(frame, image);
   frame.append(image, placeholder, fallback);
 
+  const galleryEnabled = gallery && frame.dataset.imageVariant !== "inline";
+  const link = image.closest("a[href]");
+  const onActivateKey = (event: globalThis.KeyboardEvent) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    frame.click();
+  };
+
+  const enableTrigger = () => {
+    if (!galleryEnabled) {
+      return;
+    }
+    frame.dataset.galleryTrigger = "true";
+    if (link) {
+      return;
+    }
+    frame.tabIndex = 0;
+    frame.setAttribute("role", "button");
+    frame.setAttribute("aria-haspopup", "dialog");
+    frame.setAttribute(
+      "aria-label",
+      `View image: ${detail || caption || "article image"}`,
+    );
+    frame.addEventListener("keydown", onActivateKey);
+  };
+
+  const disableTrigger = () => {
+    delete frame.dataset.galleryTrigger;
+    if (link) {
+      return;
+    }
+    frame.removeAttribute("role");
+    frame.removeAttribute("tabindex");
+    frame.removeAttribute("aria-label");
+    frame.removeAttribute("aria-haspopup");
+    frame.removeEventListener("keydown", onActivateKey);
+  };
+
+  enableTrigger();
+
   const markLoaded = () => {
     frame.dataset.imageState = "loaded";
+    enableTrigger();
   };
   const markError = () => {
+    disableTrigger();
     if (!hasContext) {
       // A decorative image with nothing to describe would only leave an empty
       // card behind, so take it out of the reading flow instead.
@@ -194,6 +279,7 @@ function enhanceInlineImage(image: HTMLImageElement): () => void {
   }
 
   return () => {
+    disableTrigger();
     image.removeEventListener("load", markLoaded);
     image.removeEventListener("error", markError);
     if (frame.parentNode) {
