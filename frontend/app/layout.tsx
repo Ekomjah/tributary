@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Arimo, Geist_Mono, Open_Sans } from "next/font/google";
 import { connection } from "next/server";
+import { Analytics } from "@vercel/analytics/next";
 
 import { readAuthRuntimeConfig } from "@/lib/auth-config";
 
@@ -49,6 +50,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body>
         <Providers auth={auth}>{children}</Providers>
+        <Analytics />
       </body>
     </html>
   );
