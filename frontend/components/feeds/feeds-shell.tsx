@@ -54,6 +54,7 @@ import { useAuthSession } from "@/lib/auth";
 import { useDelayedFlag } from "@/components/feeds/use-slow-loading";
 import { useItemMutations } from "@/components/feeds/use-item-mutations";
 import { useLabelMutations } from "@/components/feeds/use-label-mutations";
+import { optimisticItem } from "@/lib/optimistic";
 import {
   feedsHref,
   itemsQueryOptions,
@@ -533,15 +534,19 @@ export default function FeedsShell({
       setFetchingIds((current) => new Set(current).add(itemId));
     },
     onSuccess: (fetched) => {
+      // A background fetch can land while a toggle is still in flight; layer
+      // the optimistic intent so it cannot undo the user's change.
       queryClient.setQueriesData<InfiniteData<ItemPage>>(
         { queryKey: ["items"] },
         (data) =>
           mapItemPages(data, (row) =>
-            row.id === fetched.id ? { ...row, ...fetched } : row,
+            row.id === fetched.id
+              ? optimisticItem({ ...row, ...fetched })
+              : row,
           ),
       );
       queryClient.setQueryData<Item>(["item", fetched.id], (current) =>
-        current ? { ...current, ...fetched } : current,
+        current ? optimisticItem({ ...current, ...fetched }) : current,
       );
     },
     onError: showError,

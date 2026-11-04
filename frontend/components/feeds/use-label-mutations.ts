@@ -60,17 +60,26 @@ export function useLabelMutations(options: {
   const replacePending = useCallback(
     (tempId: number, label: Label) => {
       updateLabels((labels) => {
-        const next = labels.map((entry) =>
-          entry.id === tempId ? { ...label, pending: false } : entry,
-        );
         const seen = new Set<number>();
-        return next.filter((entry) => {
+        const next: Label[] = [];
+        for (const entry of labels) {
+          if (entry.id === tempId) {
+            continue;
+          }
+          // A refetch may have already replaced the pending row with the
+          // server's copy; keep whichever version arrived first.
           if (seen.has(entry.id)) {
-            return false;
+            continue;
           }
           seen.add(entry.id);
-          return true;
-        });
+          next.push(
+            entry.id === label.id ? { ...entry, pending: false } : entry,
+          );
+        }
+        if (!seen.has(label.id)) {
+          next.push({ ...label, pending: false });
+        }
+        return next;
       });
     },
     [updateLabels],
