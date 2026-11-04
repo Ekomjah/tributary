@@ -26,6 +26,7 @@ export default function LabelMenu({
   triggerClassName,
 }: LabelMenuProps) {
   const [open, setOpen] = useState(false);
+  const available = labels.filter((entry) => !entry.pending);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -48,12 +49,12 @@ export default function LabelMenu({
         <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-faint">
           Labels
         </p>
-        {labels.length === 0 ? (
+        {available.length === 0 ? (
           <p className="px-2 py-1.5 text-[12px] text-muted">
             No labels yet. Create one in the sidebar.
           </p>
         ) : (
-          labels.map((entry) => {
+          available.map((entry) => {
             const attached = selected.some(
               (itemLabel) => itemLabel.id === entry.id,
             );

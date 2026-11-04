@@ -18,6 +18,7 @@ import {
 } from "./api-auth";
 import type { AuthMode, AuthRuntimeConfig } from "./auth-config";
 import { buildAuthLoginUrl, type AuthLoginOptions } from "./auth-url";
+import { resetItemMutations } from "./item-mutations";
 
 export type { AuthLoginOptions } from "./auth-url";
 
@@ -130,6 +131,7 @@ function CloudAuthSession({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setApiUnauthorizedHandler(() => {
+      resetItemMutations();
       setSessionExpired(true);
       queryClient.clear();
     });
@@ -191,6 +193,7 @@ function CloudAuthSession({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     setSessionExpired(false);
+    resetItemMutations();
     queryClient.clear();
     const returnTo =
       typeof window === "undefined" ? "/" : `${window.location.origin}/`;

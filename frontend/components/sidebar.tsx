@@ -426,6 +426,25 @@ export default function Sidebar({
               <p className="px-2 py-1 text-[12px] text-faint">No labels yet.</p>
             ) : (
               labels.map((entry) => {
+                if (entry.pending) {
+                  return (
+                    <div
+                      key={entry.id}
+                      aria-busy="true"
+                      className="flex h-7 w-full items-center gap-2 border-l-[3px] border-transparent px-2 text-left text-[13px] text-muted"
+                    >
+                      <Tag className="size-4 shrink-0" aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {entry.name}
+                      </span>
+                      <Loader2
+                        className="size-3 shrink-0 animate-spin motion-reduce:animate-none"
+                        aria-hidden="true"
+                      />
+                      <span className="sr-only">Saving label</span>
+                    </div>
+                  );
+                }
                 const target: FeedsScope = {
                   view: "all",
                   feedId: null,

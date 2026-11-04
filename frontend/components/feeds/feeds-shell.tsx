@@ -15,6 +15,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
 } from "@tanstack/react-query";
 import {
   CircleCheck,
@@ -51,9 +52,12 @@ import {
 import { api, apiBase, ApiError } from "@/lib/api";
 import { useAuthSession } from "@/lib/auth";
 import { useDelayedFlag } from "@/components/feeds/use-slow-loading";
+import { useItemMutations } from "@/components/feeds/use-item-mutations";
+import { useLabelMutations } from "@/components/feeds/use-label-mutations";
 import {
   feedsHref,
   itemsQueryOptions,
+  mapItemPages,
   readScope,
   sameScope,
   scopeAfterFeedDelete,
@@ -84,9 +88,15 @@ const SHORTCUTS: [string, string][] = [
   ["Esc", "Back to the list"],
 ];
 
+interface StatusAction {
+  label: string;
+  run: () => void;
+}
+
 interface StatusMessage {
   message: string;
   error?: boolean;
+  action?: StatusAction;
 }
 
 interface PendingNavigation {
@@ -118,14 +128,20 @@ interface FeedsContextValue {
   feedNames: Map<number, string>;
   feedCounts: Record<number, number>;
   viewCounts: Record<ItemView, number>;
+  ingesting: boolean;
+  scrollRef: React.RefObject<HTMLElement | null>;
   showStatus: (message: string, error?: boolean) => void;
   showError: (error: unknown) => void;
   refreshAll: () => void;
   refreshing: boolean;
   submitFeed: (url: string) => Promise<string | null>;
   submitLabel: (name: string) => Promise<string | null>;
-  patchItem: (item: Item, patch: ItemUpdate) => void;
-  fetchArticle: (itemId: number) => void;
+  patchItem: (
+    item: Item,
+    patch: ItemUpdate,
+    options?: { silent?: boolean },
+  ) => void;
+  fetchArticle: (itemId: number, options?: { force?: boolean }) => void;
   fetchingIds: ReadonlySet<number>;
   toggleStar: (item: Item) => void;
   toggleRead: (item: Item) => void;
@@ -145,6 +161,12 @@ function useFeedsData() {
   const feedsQuery = useQuery({
     queryKey: ["feeds"],
     queryFn: ({ signal }) => api.listFeeds(signal),
+    // While a feed is ingesting in the background, poll until every worker
+    // finishes so the list can pick up the entries as they land.
+    refetchInterval: (query) =>
+      query.state.data?.some((feed) => feed.ingest_state === "pending")
+        ? 1500
+        : false,
   });
 
   const labelsQuery = useQuery({
@@ -260,6 +282,45 @@ export default function FeedsShell({
   const { feedsQuery, labelsQuery, countsQuery, feeds, labels } =
     useFeedsData();
 
+  const pendingFeedIds = useMemo(
+    () =>
+      new Set(
+        feeds
+          .filter((feed) => feed.ingest_state === "pending")
+          .map((feed) => feed.id),
+      ),
+    [feeds],
+  );
+  const ingesting = pendingFeedIds.size > 0;
+
+  // Invalidate the list once when an ingestion that we watched leaves the
+  // pending state, so the items stored by the last background batches appear.
+  const previousPendingFeedIds = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const settled = [...previousPendingFeedIds.current].filter(
+      (feedId) => !pendingFeedIds.has(feedId),
+    );
+    previousPendingFeedIds.current = pendingFeedIds;
+    if (settled.length === 0) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["items"] });
+    void queryClient.invalidateQueries({ queryKey: ["counts"] });
+    void queryClient.invalidateQueries({ queryKey: ["item"] });
+  }, [pendingFeedIds, queryClient]);
+
+  // A fast worker can finish between two feed polls, before the list ever sees
+  // it as "pending". Invalidate once more shortly after a deferred refresh so
+  // those last batches still appear. Slower workers are covered by polling.
+  const settleDeferredIngest = useCallback(() => {
+    window.setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ["feeds"] });
+      void queryClient.invalidateQueries({ queryKey: ["items"] });
+      void queryClient.invalidateQueries({ queryKey: ["counts"] });
+      void queryClient.invalidateQueries({ queryKey: ["item"] });
+    }, 2000);
+  }, [queryClient]);
+
   const feedNames = useMemo(() => {
     const names = new Map<number, string>();
     for (const feed of feeds) {
@@ -298,11 +359,23 @@ export default function FeedsShell({
     [showStatus],
   );
 
+  const showRetryableError = useCallback(
+    (error: unknown, retry: () => void) => {
+      setStatus({
+        message: messageOf(error),
+        error: true,
+        action: { label: "Retry", run: retry },
+      });
+    },
+    [],
+  );
+
   const queryError =
     feedsQuery.error ?? labelsQuery.error ?? countsQuery.error;
   const banner =
     status ??
     (queryError ? { message: messageOf(queryError), error: true } : null);
+  const bannerAction = status?.action ?? null;
 
   const beginScopeNavigation = useCallback(
     (next: FeedsScope) => {
@@ -328,7 +401,7 @@ export default function FeedsShell({
       if (queryClient.getQueryData(options.queryKey)) {
         return;
       }
-      void queryClient.prefetchQuery(options);
+      void queryClient.prefetchInfiniteQuery(options);
     },
     [queryClient, scope],
   );
@@ -366,7 +439,8 @@ export default function FeedsShell({
   }, [pathname]);
 
   useEffect(() => {
-    if (!status) {
+    if (!status || status.action) {
+      // A failed mutation stays until the user retries or dismisses it.
       return;
     }
     const timer = window.setTimeout(
@@ -438,58 +512,41 @@ export default function FeedsShell({
     [navigateToScope, scope.label],
   );
 
-  const { mutate: mutateItem } = useMutation({
+  const {
+    patchItem,
+    toggleStar,
+    toggleRead,
+    toggleDecision,
+    toggleLabel,
+  } = useItemMutations({ onError: showRetryableError });
+
+  const { mutate: runFetchArticle } = useMutation({
     mutationFn: ({
       itemId,
-      patch,
+      force = false,
     }: {
       itemId: number;
-      patch: ItemUpdate;
-    }) => api.updateItem(itemId, patch),
-    onSuccess: (updated) => {
-      queryClient.setQueriesData<ItemPage>(
-        { queryKey: ["items"] },
-        (page) =>
-          page
-            ? {
-                ...page,
-                items: page.items.map((row) =>
-                  row.id === updated.id ? updated : row,
-                ),
-              }
-            : page,
-      );
-      queryClient.setQueryData<Item>(["item", updated.id], updated);
-      void queryClient.invalidateQueries({ queryKey: ["counts"] });
-    },
-    onError: showError,
-  });
-
-  const { mutate: fetchArticle } = useMutation({
-    mutationFn: (itemId: number) => api.fetchItemArticle(itemId),
-    onMutate: (itemId) => {
+      force?: boolean;
+    }) => api.fetchItemArticle(itemId, force),
+    onMutate: ({ itemId }) => {
       inFlightFetches.current.add(itemId);
       setFetchingIds((current) => new Set(current).add(itemId));
     },
     onSuccess: (fetched) => {
-      queryClient.setQueriesData<ItemPage>(
+      queryClient.setQueriesData<InfiniteData<ItemPage>>(
         { queryKey: ["items"] },
-        (page) =>
-          page
-            ? {
-                ...page,
-                items: page.items.map((row) =>
-                  row.id === fetched.id ? { ...row, ...fetched } : row,
-                ),
-              }
-            : page,
+        (data) =>
+          mapItemPages(data, (row) =>
+            row.id === fetched.id ? { ...row, ...fetched } : row,
+          ),
       );
       queryClient.setQueryData<Item>(["item", fetched.id], (current) =>
         current ? { ...current, ...fetched } : current,
       );
     },
     onError: showError,
-    onSettled: (_data, _error, itemId) => {
+    onSettled: (_data, _error, variables) => {
+      const itemId = variables.itemId;
       inFlightFetches.current.delete(itemId);
       setFetchingIds((current) => {
         if (!current.has(itemId)) {
@@ -502,62 +559,12 @@ export default function FeedsShell({
     },
   });
 
-  const { mutateAsync: toggleItemLabel } = useMutation({
-    mutationFn: async ({
-      item,
-      label: target,
-    }: {
-      item: Item;
-      label: Label;
-    }) => {
-      const attached = item.labels.some((entry) => entry.id === target.id);
-      if (attached) {
-        await api.removeItemLabel(item.id, target.id);
-        return { itemId: item.id, labelId: target.id, updated: null };
-      }
-
-      const updated = await api.addItemLabel(item.id, target.id);
-      return { itemId: item.id, labelId: target.id, updated };
+  const fetchArticle = useCallback(
+    (itemId: number, options?: { force?: boolean }) => {
+      runFetchArticle({ itemId, force: options?.force ?? false });
     },
-    onSuccess: ({ itemId, labelId, updated }) => {
-      queryClient.setQueriesData<ItemPage>(
-        { queryKey: ["items"] },
-        (page) => {
-          if (!page) {
-            return page;
-          }
-          return {
-            ...page,
-            items: page.items.map((row) => {
-              if (row.id !== itemId) {
-                return row;
-              }
-              if (updated) {
-                return updated;
-              }
-              return {
-                ...row,
-                labels: row.labels.filter((entry) => entry.id !== labelId),
-              };
-            }),
-          };
-        },
-      );
-      queryClient.setQueryData<Item>(["item", itemId], (current) => {
-        if (!current) {
-          return current;
-        }
-        if (updated) {
-          return updated;
-        }
-        return {
-          ...current,
-          labels: current.labels.filter((entry) => entry.id !== labelId),
-        };
-      });
-    },
-    onError: showError,
-  });
+    [runFetchArticle],
+  );
 
   const { mutate: runRefresh, isPending: refreshingAll } = useMutation({
     mutationFn: () => api.refreshFeeds(),
@@ -567,26 +574,17 @@ export default function FeedsShell({
         return;
       }
 
-      const newItems = results.reduce(
-        (sum, result) => sum + result.new_items,
-        0,
-      );
+      if (results.some((result) => result.pending_entries > 0)) {
+        settleDeferredIngest();
+      }
       const failures = results.filter((result) => result.error);
       if (failures.length > 0) {
         showStatus(
-          `${plural(newItems, "new item")} · ${plural(
-            failures.length,
-            "feed",
-          )} failed.`,
+          `${plural(failures.length, "feed")} could not be refreshed.`,
           true,
         );
       } else {
-        showStatus(
-          `${plural(newItems, "new item")} from ${plural(
-            results.length,
-            "feed",
-          )}.`,
-        );
+        showStatus("Feeds refreshed.");
       }
 
       void queryClient.invalidateQueries();
@@ -603,12 +601,7 @@ export default function FeedsShell({
           true,
         );
       } else {
-        showStatus(
-          `“${result.title || "Pipe feed"}” refreshed: ${plural(
-            result.new_items,
-            "item",
-          )}.`,
-        );
+        showStatus(`“${result.title || "Pipe feed"}” refreshed.`);
       }
       void queryClient.invalidateQueries();
     },
@@ -618,49 +611,6 @@ export default function FeedsShell({
   const { mutateAsync: addFeed } = useMutation({
     mutationFn: (url: string) => api.createFeed(url),
   });
-
-  const { mutateAsync: createLabel } = useMutation({
-    mutationFn: (name: string) => api.createLabel(name),
-  });
-
-  const patchItem = useCallback(
-    (item: Item, patch: ItemUpdate) => {
-      mutateItem({ itemId: item.id, patch });
-    },
-    [mutateItem],
-  );
-
-  const toggleStar = useCallback(
-    (item: Item) => {
-      patchItem(item, { starred: !item.starred });
-    },
-    [patchItem],
-  );
-
-  const toggleRead = useCallback(
-    (item: Item) => {
-      patchItem(item, { is_read: !item.is_read });
-    },
-    [patchItem],
-  );
-
-  const toggleDecision = useCallback(
-    (item: Item, decision: Decision) => {
-      patchItem(item, {
-        decision: item.decision === decision ? null : decision,
-      });
-    },
-    [patchItem],
-  );
-
-  const toggleLabel = useCallback(
-    (item: Item, target: Label) => {
-      toggleItemLabel({ item, label: target }).catch(() => {
-        // The mutation's onError already surfaced the message.
-      });
-    },
-    [toggleItemLabel],
-  );
 
   const openShare = useCallback((item: Item) => {
     setShareItem(item);
@@ -702,11 +652,11 @@ export default function FeedsShell({
             true,
           );
         } else {
+          if (result.pending_entries > 0) {
+            settleDeferredIngest();
+          }
           showStatus(
-            `${result.title || feed.title || hostOf(feed.url)}: ${plural(
-              result.new_items,
-              "new item",
-            )}.`,
+            `Added “${result.title || feed.title || hostOf(feed.url)}”.`,
           );
         }
 
@@ -729,28 +679,13 @@ export default function FeedsShell({
         return message;
       }
     },
-    [addFeed, navigateToScope, queryClient, showStatus],
+    [addFeed, navigateToScope, queryClient, settleDeferredIngest, showStatus],
   );
 
-  const submitLabel = useCallback(
-    async (name: string) => {
-      try {
-        const created = await createLabel(name);
-        queryClient.setQueryData<Label[]>(["labels"], (current) =>
-          [...(current ?? []), created].sort((left, right) =>
-            left.name.localeCompare(right.name),
-          ),
-        );
-        showStatus(`Label “${created.name}” added.`);
-        return null;
-      } catch (error) {
-        const message = messageOf(error);
-        showStatus(message, true);
-        return message;
-      }
-    },
-    [createLabel, queryClient, showStatus],
-  );
+  const { createLabel: submitLabel } = useLabelMutations({
+    onStatus: showStatus,
+    onError: showRetryableError,
+  });
 
   const deleteFeed = useCallback(
     async (feed: Feed) => {
@@ -883,6 +818,8 @@ export default function FeedsShell({
       feedNames,
       feedCounts,
       viewCounts: counts,
+      ingesting,
+      scrollRef: mainRef,
       showStatus,
       showError,
       refreshAll,
@@ -914,6 +851,7 @@ export default function FeedsShell({
       feeds,
       fetchArticle,
       fetchingIds,
+      ingesting,
       labels,
       navigateToScope,
       openShare,
@@ -1157,6 +1095,20 @@ export default function FeedsShell({
               />
             )}
             <span className="min-w-0 flex-1">{banner.message}</span>
+            {bannerAction && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="-my-1 shrink-0"
+                onClick={() => {
+                  setStatus(null);
+                  bannerAction.run();
+                }}
+              >
+                {bannerAction.label}
+              </Button>
+            )}
             {status && (
               <Button
                 type="button"
