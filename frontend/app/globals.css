@@ -39,7 +39,8 @@
 @theme inline {
   --font-sans: var(--font-arimo), Arial, Helvetica, sans-serif;
   --font-reading: var(--font-open-sans), "Open Sans", system-ui, sans-serif;
-  --font-mono: var(--font-geist), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    monospace;
 
   --color-canvas: var(--bg);
   --color-chrome: var(--chrome);
