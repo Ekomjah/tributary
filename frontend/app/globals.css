@@ -550,6 +550,32 @@
   outline-offset: 2px;
 }
 
+/* A quiet expand chip in the corner so a loaded image reads as openable. */
+.article-image-frame[data-gallery-trigger="true"][data-image-state="loaded"]::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background-color: rgba(20, 20, 20, 0.62);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cpolyline points='9 21 3 21 3 15'/%3E%3Cline x1='21' y1='3' x2='14' y2='10'/%3E%3Cline x1='3' y1='21' x2='10' y2='14'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 14px 14px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  opacity: 0.78;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.article-image-frame[data-gallery-trigger="true"][data-image-state="loaded"]:hover::after,
+.article-image-frame[data-gallery-trigger="true"][data-image-state="loaded"]:focus-visible::after {
+  opacity: 1;
+}
+
 .article-image-placeholder {
   display: none;
 }
