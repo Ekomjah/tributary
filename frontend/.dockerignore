@@ -1,0 +1,14 @@
+# The image builds from the lockfile, not from a host install.
+node_modules/
+.pnpm-store/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Dockerfile
+.dockerignore

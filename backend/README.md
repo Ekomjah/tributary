@@ -33,7 +33,25 @@ In cloud mode the backend also requires PostgreSQL, `CORS_ORIGINS`, and Auth0
 the reader's **Regular Web Application**; the reader owns the login session and
 sends the access token to this API as a bearer token.
 
-The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`.
+The reader is a separate Next.js app in `../frontend`. Run it with `pnpm dev`,
+or start both services with the repository's Docker compose file.
+
+## Docker
+
+The API image is published as `ghcr.io/ekomjah/tributary-api` for `linux/amd64`
+and `linux/arm64`. It is normally started with the compose file at the
+repository root, which also runs the reader:
+
+```bash
+docker compose up -d
+```
+
+The image runs as uid 10001 and keeps SQLite at `/data/tributary/tributary.db`
+on the compose file's `tributary-data` volume. `tributary serve` applies
+migrations on startup, so there is no separate migration container.
+`OLLAMA_HINT` appends a deployment message to local Ollama connection errors;
+compose uses it to name the optional `ai` profile. The image builds on Python
+3.12 — `.python-version` (3.10) only affects local `uv` runs.
 
 ## Status
 

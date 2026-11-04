@@ -1,0 +1,19 @@
+# Keep the build context to the sources the image actually runs.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+tests/
+fixtures/
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+dist/
+build/
+*.egg-info/

@@ -21,7 +21,7 @@ Tributary brings back two things people still miss: Yahoo Pipes (drag boxes to m
 
 ## Quick start
 
-Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [pnpm](https://pnpm.io/), and [Ollama](https://ollama.com) for the AI boxes.
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node.js 20+ with [pnpm](https://pnpm.io/), and [Ollama](https://ollama.com) for the AI boxes. The Docker install needs only Docker with Compose v2.
 
 ```bash
 git clone https://github.com/Ekomjah/tributary
@@ -35,6 +35,9 @@ make dev
 local Ollama server. `make dev` applies the migrations, starts the API at
 <http://127.0.0.1:8000> (docs at `/docs`), and starts the reader at
 <http://localhost:3000>.
+
+To run the same build without cloning the repository, use the
+[Docker images](#docker).
 
 To run the API by itself with the profile loaded:
 
@@ -196,6 +199,7 @@ PostgreSQL pool sizing and idle-connection recovery are controlled by
 | `OLLAMA_MODEL`                   | Model used by the AI boxes in local mode                         | `gemma3:1b`              |
 | `OLLAMA_HOST`                    | Local Ollama address                                             | `http://localhost:11434` |
 | `OLLAMA_TIMEOUT`                 | Seconds before a model call times out                            | `120`                    |
+| `OLLAMA_HINT`                    | Appended to local Ollama connection errors; compose sets it      | empty                    |
 | `SERPAPI_API_KEY`                | SerpAPI key. Search is off when empty                            | unset                    |
 | `SERPAPI_ENGINE`                 | Default search engine: `google_news` or `google`                 | `google_news`            |
 | `SERPAPI_MAX_RESULTS`            | Results per search, 1 to 20                                      | `10`                     |
@@ -212,7 +216,7 @@ PostgreSQL pool sizing and idle-connection recovery are controlled by
 | `TRIBUTARY_FETCH_TIMEOUT`        | Seconds before a feed request times out                          | `20`                     |
 | `TRIBUTARY_ARTICLE_LOCK_TIMEOUT` | Seconds to wait for another fetch of the same host               | `30`                     |
 | `TRIBUTARY_PIPE_RUN_TIMEOUT`     | Seconds a pipe run may spend before its next step is refused     | `900`                    |
-| `NEXT_PUBLIC_API_BASE`           | API address used by the reader                                   | `http://127.0.0.1:8000`  |
+| `NEXT_PUBLIC_API_BASE`           | API address used by the reader; `/` means same origin             | `http://127.0.0.1:8000`  |
 
 The rest of the Sentry switches (`SENTRY_SEND_USER_INFO`,
 `SENTRY_COLLECT_HTTP_HEADERS`, `SENTRY_COLLECT_QUERY_PARAMS`,
@@ -235,7 +239,75 @@ Sentry is opt-in through `SENTRY_DSN`. Without a DSN the app runs without a Sent
 
 The build stays account-free: SQLite by default, or PostgreSQL when
 `DATABASE_URL` is set. `tributary serve` runs the API and applies migrations on
-startup. The reader is a Next.js app:
+startup.
+
+### Docker
+
+Two prebuilt images — `ghcr.io/ekomjah/tributary-api` and
+`ghcr.io/ekomjah/tributary-web` — so nothing is cloned or compiled. Download the
+compose file for the release you want, pin that version, and start it:
+
+```bash
+curl -fLO https://raw.githubusercontent.com/Ekomjah/tributary/v0.1.0/compose.yaml
+printf 'TRIBUTARY_VERSION=v0.1.0\n' > .env
+docker compose up -d
+```
+
+Open <http://localhost:3000>. The reader and the API share one origin: the
+browser calls `/api/*` on the reader, which rewrites it to the API service, so
+there is no CORS setup and no API host to configure. Only the reader publishes
+a port.
+
+The compose file names the API service `api`, and the reader image is built to
+rewrite to `http://api:8000`. Renaming that service (or running the reader image
+outside this compose file) returns 502s unless the image is rebuilt with a
+different `API_PROXY_TARGET`.
+
+Data lives in the `tributary_tributary-data` volume at
+`/data/tributary/tributary.db`. Back it up with the API stopped:
+
+```bash
+docker compose stop api
+docker compose run -T --rm --no-deps --entrypoint tar api \
+  czf - -C /data tributary > tributary-$(date +%F).tgz
+docker compose start api
+```
+
+Upgrade by changing `TRIBUTARY_VERSION` in `.env`, then:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+`TRIBUTARY_VERSION` defaults to `latest`; pin a release tag in `.env` for
+reproducible upgrades. Images are published for `linux/amd64` and
+`linux/arm64`.
+
+| Variable             | Purpose                                         | Default               |
+| -------------------- | ----------------------------------------------- | --------------------- |
+| `TRIBUTARY_VERSION`  | Image tag for both images                       | `latest`              |
+| `TRIBUTARY_WEB_PORT` | Host port for the reader                        | `3000`                |
+| `TRIBUTARY_BIND`     | Host interface to publish on                    | `127.0.0.1`           |
+| `OLLAMA_MODEL`       | Model pulled and used by the AI profile         | `gemma3:1b`           |
+| `OLLAMA_HOST`        | Ollama address seen by the API                  | `http://ollama:11434` |
+| `SERPAPI_API_KEY`    | Enables search                                  | unset                 |
+| `SENTRY_DSN`         | Enables Sentry                                  | unset                 |
+
+AI boxes need the optional Ollama profile, roughly 2 GB of free RAM and a
+one-time model download:
+
+```bash
+docker compose --profile ai up -d
+```
+
+Without it the reader and pipes work, and an AI box reports that the profile is
+off. To use an Ollama server already running on the host, set
+`OLLAMA_HOST=http://host.docker.internal:11434` in `.env` and start that server
+with `OLLAMA_HOST=0.0.0.0 ollama serve`.
+
+### From source
+
+The reader is a Next.js app:
 
 ```bash
 cd backend
@@ -249,6 +321,10 @@ pnpm start
 Point the reader at the API with `NEXT_PUBLIC_API_BASE` before building. Keep
 `.env.local`, the SQLite database and the reader's `.next` directory off any
 public path.
+
+The standalone output and the `/api/*` rewrite are Docker-only: `next.config.ts`
+enables them only when `NEXT_OUTPUT` or `API_PROXY_TARGET` is set, and the image
+is the only place that sets them. Leave both unset for the hosted Vercel build.
 
 ## Cloud profile
 
