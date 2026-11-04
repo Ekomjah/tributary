@@ -241,3 +241,15 @@ def test_scrubber_strips_url_queries_and_credentials(monkeypatch) -> None:
     assert scrubbed["breadcrumbs"][0]["data"]["url"] == "https://example.com/a"
     assert "secret" not in str(scrubbed)
     assert "user:pass" not in str(scrubbed)
+
+
+def test_configure_logging_quiets_trafilatura(settings: Settings) -> None:
+    import logging
+
+    from tributary.observability import configure_logging
+
+    configure_logging(settings.model_copy(update={"log_level": "INFO"}))
+
+    assert logging.getLogger("trafilatura").level == logging.ERROR
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING

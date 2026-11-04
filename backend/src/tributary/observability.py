@@ -77,6 +77,28 @@ def _make_scrubber(secrets: Iterable[str] = ()):
     return scrub
 
 
+def configure_logging(settings: Settings) -> None:
+    """Configure application logging once and quiet noisy third parties.
+
+    ``trafilatura`` logs a ``discarding data`` warning for every challenge or
+    empty page. Those outcomes are already classified and counted, so keeping
+    the warning at ERROR avoids burying the structured fetch line.
+    """
+
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(levelname)s %(name)s: %(message)s",
+        )
+    else:
+        root.setLevel(level)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("trafilatura").setLevel(logging.ERROR)
+
+
 def init_sentry(settings: Settings) -> None:
     """Enable Sentry only when a DSN is configured.
 

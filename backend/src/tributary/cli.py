@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -18,7 +17,7 @@ from .boxes import run_pipe as execute_pipe
 from .config import ConfigurationError, Settings, get_settings
 from .db import create_engine, create_session_factory, ensure_local_user, init_db, session_scope
 from .models import Feed, Item
-from .observability import init_sentry
+from .observability import configure_logging, init_sentry
 from .services import discovery, feeds, model, refine
 from .services import search as web_search
 
@@ -55,12 +54,7 @@ def _load_settings(db_path: Path | None = None) -> Settings:
     if not _SENTRY_READY:
         init_sentry(settings)
         _SENTRY_READY = True
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    configure_logging(settings)
     return _settings_with_db_path(settings, db_path)
 
 
