@@ -9,8 +9,12 @@ FROM python:3.12-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# `.python-version` pins 3.10 for local development; the image builds on the
+# 3.12 interpreter that ships with the base image. UV_PYTHON overrides the
+# version file, and downloads stay off so the build never fetches a runtime.
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
+    UV_PYTHON=3.12 \
     UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app/backend
