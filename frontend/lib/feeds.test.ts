@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { InfiniteData } from "@tanstack/react-query";
 
 import {
   articleHref,
   articleSlug,
   feedsHref,
+  flattenItemPages,
   itemIdFromHash,
   itemIdFromSlug,
   itemsQueryOptions,
+  mapItemPages,
+  PAGE_SIZE,
   readScope,
   sameScope,
   sameScopeLocation,
@@ -15,7 +19,7 @@ import {
   scopeKey,
   scopeLabel,
 } from "./feeds";
-import type { Feed } from "./types";
+import type { Feed, Item, ItemPage } from "./types";
 
 const FEEDS: Feed[] = [
   {
@@ -26,9 +30,51 @@ const FEEDS: Feed[] = [
     pipe_id: null,
     last_fetched: null,
     last_error: null,
+    ingest_state: "ready",
+    ingest_total: 0,
+    ingest_processed: 0,
+    ingest_error: null,
     created_at: "2026-10-28T10:00:00Z",
   },
 ];
+
+function item(id: number): Item {
+  return {
+    id,
+    feed_id: 3,
+    guid: `guid-${id}`,
+    title: `Item ${id}`,
+    link: `https://example.com/${id}`,
+    published: null,
+    content: "",
+    content_html: null,
+    author: null,
+    cover_image: null,
+    cover_image_alt: null,
+    cover_caption: null,
+    content_full: null,
+    content_fetched_at: null,
+    fetch_status: null,
+    discussion_url: null,
+    points: null,
+    comment_count: null,
+    shared_by: null,
+    shared_at: null,
+    origin_feed_title: null,
+    source: null,
+    is_read: false,
+    starred: false,
+    decision: null,
+    fetched_at: "2026-10-28T10:00:00Z",
+    labels: [],
+    summary: null,
+    why_care: null,
+  };
+}
+
+function page(offset: number, ids: number[], total: number): ItemPage {
+  return { items: ids.map(item), total, limit: PAGE_SIZE, offset };
+}
 
 describe("readScope", () => {
   it("reads a full scope from the query string", () => {
@@ -194,6 +240,63 @@ describe("scope comparison", () => {
         query: "sqlite",
       }).queryKey,
     ).toEqual(["items", "unread", 3, null, "sqlite"]);
+  });
+});
+
+describe("item pages", () => {
+  const scope = {
+    view: "all",
+    feedId: null,
+    label: null,
+    query: "",
+  } as const;
+
+  it("uses the feed batch size for the first page", () => {
+    expect(PAGE_SIZE).toBe(20);
+    expect(itemsQueryOptions(scope).initialPageParam).toBe(0);
+  });
+
+  it("computes the next offset from the rows that came back", () => {
+    const options = itemsQueryOptions(scope);
+
+    expect(options.getNextPageParam(page(0, [1, 2], 4))).toBe(2);
+    expect(options.getNextPageParam(page(2, [3, 4], 4))).toBeUndefined();
+    expect(options.getNextPageParam(page(0, [], 0))).toBeUndefined();
+  });
+
+  it("flattens pages and drops rows repeated by offset drift", () => {
+    const data: InfiniteData<ItemPage> = {
+      pages: [page(0, [1, 2], 4), page(2, [2, 3], 4)],
+      pageParams: [0, 2],
+    };
+
+    expect(flattenItemPages(data).map((entry) => entry.id)).toEqual([1, 2, 3]);
+    expect(flattenItemPages(undefined)).toEqual([]);
+  });
+
+  it("applies an item mutation to every cached page", () => {
+    const data: InfiniteData<ItemPage> = {
+      pages: [page(0, [1, 2], 4), page(2, [3, 4], 4)],
+      pageParams: [0, 2],
+    };
+
+    const mapped = mapItemPages(data, (entry) => ({
+      ...entry,
+      starred: true,
+    }));
+
+    expect(mapped?.pages.map((entry) => entry.total)).toEqual([4, 4]);
+    expect(
+      mapped?.pages.flatMap((entry) =>
+        entry.items.map((row) => [row.id, row.starred]),
+      ),
+    ).toEqual([
+      [1, true],
+      [2, true],
+      [3, true],
+      [4, true],
+    ]);
+    expect(mapItemPages(undefined, (entry) => entry)).toBeUndefined();
   });
 });
 

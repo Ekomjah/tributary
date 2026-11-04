@@ -1,6 +1,9 @@
+import type { InfiniteData } from "@tanstack/react-query";
+
 import { api } from "./api";
+import { optimisticPage } from "./optimistic";
 import { hostOf, slugify } from "./text";
-import type { Feed, Item, ItemView } from "./types";
+import type { Feed, Item, ItemPage, ItemView } from "./types";
 
 export const VIEWS: ItemView[] = ["all", "unread", "starred"];
 export const VIEW_NAMES: Record<ItemView, string> = {
@@ -8,7 +11,7 @@ export const VIEW_NAMES: Record<ItemView, string> = {
   unread: "Unread",
   starred: "Starred items",
 };
-export const PAGE_SIZE = 100;
+export const PAGE_SIZE = 20;
 
 export interface FeedsScope {
   view: ItemView;
@@ -81,16 +84,73 @@ export function itemsQueryKey(scope: FeedsScope) {
 export function itemsQueryOptions(scope: FeedsScope) {
   return {
     queryKey: itemsQueryKey(scope),
-    queryFn: ({ signal }: { signal: AbortSignal }) =>
-      api.listItems({
+    initialPageParam: 0,
+    queryFn: async ({
+      pageParam,
+      signal,
+    }: {
+      pageParam: number;
+      signal: AbortSignal;
+    }) => {
+      const page = await api.listItems({
         unread: scope.view === "unread" ? true : undefined,
         starred: scope.view === "starred" ? true : undefined,
         feedId: scope.feedId,
         label: scope.label,
         q: scope.query || undefined,
         limit: PAGE_SIZE,
+        offset: pageParam,
         signal,
-      }),
+      });
+      // A fetch that was in flight when a toggle happened must not undo the
+      // optimistic value it raced with.
+      return optimisticPage(page, scope);
+    },
+    getNextPageParam: (lastPage: ItemPage) => {
+      const next = lastPage.offset + lastPage.items.length;
+      return lastPage.items.length > 0 && next < lastPage.total
+        ? next
+        : undefined;
+    },
+  };
+}
+
+/** Flatten the loaded pages and drop rows duplicated by offset drift. */
+export function flattenItemPages(
+  data: InfiniteData<ItemPage> | undefined,
+): Item[] {
+  if (!data) {
+    return [];
+  }
+
+  const seen = new Set<number>();
+  const items: Item[] = [];
+  for (const page of data.pages) {
+    for (const item of page.items) {
+      if (seen.has(item.id)) {
+        continue;
+      }
+      seen.add(item.id);
+      items.push(item);
+    }
+  }
+  return items;
+}
+
+/** Apply a mutation result to every cached page of an infinite item list. */
+export function mapItemPages(
+  data: InfiniteData<ItemPage> | undefined,
+  update: (item: Item) => Item,
+): InfiniteData<ItemPage> | undefined {
+  if (!data) {
+    return data;
+  }
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map(update),
+    })),
   };
 }
 

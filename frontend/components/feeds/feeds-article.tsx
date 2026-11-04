@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, TriangleAlert } from "lucide-react";
 
 import ArticleView from "@/components/article-view";
@@ -13,11 +13,13 @@ import { api, ApiError } from "@/lib/api";
 import {
   articleHref,
   feedsHref,
+  flattenItemPages,
   itemHash,
   itemIdFromSlug,
   itemsQueryOptions,
   scopeLabel,
 } from "@/lib/feeds";
+import { optimisticItem } from "@/lib/optimistic";
 import type { Item } from "@/lib/types";
 
 function errorMessage(error: unknown): string {
@@ -136,7 +138,8 @@ export default function FeedsArticle({ slug }: { slug: string }) {
   const itemQuery = useQuery({
     queryKey: ["item", itemId],
     enabled: itemId !== null,
-    queryFn: ({ signal }) => api.getItem(itemId as number, signal),
+    queryFn: async ({ signal }) =>
+      optimisticItem(await api.getItem(itemId as number, signal)),
     staleTime: 0,
     retry: (failureCount, error) => {
       if (error instanceof ApiError && error.status === 404) {
@@ -146,13 +149,13 @@ export default function FeedsArticle({ slug }: { slug: string }) {
     },
   });
 
-  const listQuery = useQuery({
+  const listQuery = useInfiniteQuery({
     ...itemsQueryOptions(scope),
     enabled: itemId !== null,
   });
 
   const item = itemQuery.data ?? null;
-  const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
+  const items = useMemo(() => flattenItemPages(listQuery.data), [listQuery.data]);
   const contextLabel = scopeLabel(scope, feeds);
   const backHref =
     itemId === null ? feedsHref(scope) : `${feedsHref(scope)}${itemHash(itemId)}`;
@@ -191,19 +194,34 @@ export default function FeedsArticle({ slug }: { slug: string }) {
     ensured.current.add(item.id);
 
     if (!item.is_read) {
-      patchItem(item, { is_read: true });
+      patchItem(item, { is_read: true }, { silent: true });
     }
     if (
       !item.content_full &&
       item.fetch_status === null &&
-      !fetchingIds.has(item.id)
+      !fetchingIds.has(item.id) &&
+      // An HN self post already carries its full body. Fetching its discussion
+      // page would replace that text with a page not meant to be the article.
+      !(item.discussion_url && item.content.trim())
     ) {
       fetchArticle(item.id);
     }
   }, [fetchArticle, fetchingIds, item, patchItem]);
 
+  useEffect(() => {
+    // A deep link can point at an article beyond the first page. Load pages
+    // until the article itself is in the list so j/k can move from it.
+    if (!item || items.some((entry) => entry.id === item.id)) {
+      return;
+    }
+    if (!listQuery.hasNextPage || listQuery.isFetchingNextPage) {
+      return;
+    }
+    void listQuery.fetchNextPage();
+  }, [item, items, listQuery]);
+
   const navigateArticle = useCallback(
-    (step: number) => {
+    async (step: number) => {
       if (!item || items.length === 0) {
         return;
       }
@@ -213,15 +231,30 @@ export default function FeedsArticle({ slug }: { slug: string }) {
         return;
       }
 
-      const nextIndex = Math.min(
+      let list = items;
+      let nextIndex = Math.min(
         items.length - 1,
         Math.max(0, currentIndex + step),
       );
+
+      if (
+        step > 0 &&
+        currentIndex === items.length - 1 &&
+        listQuery.hasNextPage
+      ) {
+        const result = await listQuery.fetchNextPage();
+        list = flattenItemPages(result.data ?? listQuery.data);
+        nextIndex = currentIndex + 1;
+      }
+
       if (nextIndex === currentIndex) {
         return;
       }
 
-      const next = items[nextIndex];
+      const next = list[nextIndex];
+      if (!next) {
+        return;
+      }
       queryClient.setQueryData<Item>(
         ["item", next.id],
         (current) => current ?? next,
@@ -229,7 +262,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       setPendingArticle({ id: next.id, title: next.title || "Untitled" });
       router.push(articleHref(next, scope));
     },
-    [item, items, queryClient, router, scope, setPendingArticle],
+    [item, items, listQuery, queryClient, router, scope, setPendingArticle],
   );
 
   useEffect(() => {
@@ -271,7 +304,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       const key = event.key.toLowerCase();
       if (key === "j" || key === "k") {
         event.preventDefault();
-        navigateArticle(key === "j" ? 1 : -1);
+        void navigateArticle(key === "j" ? 1 : -1);
         return;
       }
 
@@ -385,6 +418,7 @@ export default function FeedsArticle({ slug }: { slug: string }) {
       onToggleDecision={toggleDecision}
       onToggleLabel={toggleLabel}
       onSelectFeed={selectFeed}
+      onRetryFullText={() => fetchArticle(item.id, { force: true })}
       onShare={sharingEnabled ? openShare : undefined}
     />
   );

@@ -3,9 +3,12 @@ export type Decision = "keep" | "drop";
 export interface Label {
   id: number;
   name: string;
+  /** Client-only marker for a label whose creation is still in flight. */
+  pending?: boolean;
 }
 
 export type FeedKind = "feed" | "search" | "pipe" | "shared";
+export type IngestState = "ready" | "pending" | "partial";
 
 export interface Feed {
   id: number;
@@ -15,6 +18,10 @@ export interface Feed {
   pipe_id: number | null;
   last_fetched: string | null;
   last_error: string | null;
+  ingest_state: IngestState;
+  ingest_total: number;
+  ingest_processed: number;
+  ingest_error: string | null;
   created_at: string;
 }
 
@@ -53,6 +60,9 @@ export interface Item {
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
+  discussion_url: string | null;
+  points: number | null;
+  comment_count: number | null;
   shared_by: string | null;
   shared_at: string | null;
   origin_feed_title: string | null;
@@ -76,6 +86,9 @@ export interface ArticleFetch {
   content_full: string | null;
   content_fetched_at: string | null;
   fetch_status: FetchStatus | null;
+  discussion_url: string | null;
+  points: number | null;
+  comment_count: number | null;
 }
 
 export interface ItemPage {
@@ -125,6 +138,7 @@ export interface FeedRefreshResult {
   kind: FeedKind;
   new_items: number;
   total_entries: number;
+  pending_entries: number;
   not_modified: boolean;
   error: string | null;
 }
@@ -138,6 +152,12 @@ export interface PipeFeedResult {
 }
 
 export type ItemView = "unread" | "all" | "starred";
+
+/** Sidebar counters assembled from several list endpoints. */
+export interface Counts {
+  views: Record<ItemView, number>;
+  feeds: Record<number, number>;
+}
 
 export type SearchEngine = "google_news" | "google";
 export type SearchFreshness = "day" | "week" | "month" | "year";

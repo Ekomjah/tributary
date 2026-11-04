@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
-  useQuery,
+  useInfiniteQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -12,6 +12,7 @@ import ArticleList from "@/components/article-list";
 import { useFeeds } from "@/components/feeds/feeds-shell";
 import {
   articleHref,
+  flattenItemPages,
   itemIdFromHash,
   itemsQueryOptions,
   sameScope,
@@ -35,6 +36,8 @@ export default function FeedsList() {
     labels,
     feedNames,
     feedCounts,
+    ingesting,
+    scrollRef,
     toggleStar,
     toggleRead,
     toggleLabel,
@@ -53,16 +56,26 @@ export default function FeedsList() {
   const lastScopeKey = useRef(key);
   const restoredScope = useRef<string | null>(null);
 
-  const itemsQuery = useQuery({
+  const itemsQuery = useInfiniteQuery({
     ...itemsQueryOptions(effectiveScope),
     placeholderData: keepPreviousData,
   });
   const { refetch: refetchItems } = itemsQuery;
 
-  const items = useMemo(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
-  const total = itemsQuery.data?.total ?? 0;
+  const items = useMemo(
+    () => flattenItemPages(itemsQuery.data),
+    [itemsQuery.data],
+  );
+  const total = itemsQuery.data?.pages[0]?.total ?? 0;
   const loading = itemsQuery.isPending;
   const busy = itemsQuery.isFetching || pendingScope !== null;
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = itemsQuery;
+  const canLoadMore = hasNextPage && !itemsQuery.isPlaceholderData;
+  const loadMore = useCallback(() => {
+    if (canLoadMore && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [canLoadMore, fetchNextPage, isFetchingNextPage]);
 
   const hashItemId =
     typeof window === "undefined"
@@ -201,7 +214,7 @@ export default function FeedsList() {
   }, [navigateToScope, pendingScope, refetchItems]);
 
   const moveSelection = useCallback(
-    (step: number) => {
+    async (step: number) => {
       if (items.length === 0) {
         return;
       }
@@ -209,13 +222,29 @@ export default function FeedsList() {
       const currentIndex = items.findIndex(
         (item) => item.id === selectedItemId,
       );
-      const nextIndex =
+      let list = items;
+      let nextIndex =
         currentIndex === -1
           ? step > 0
             ? 0
             : items.length - 1
           : Math.min(items.length - 1, Math.max(0, currentIndex + step));
-      const next = items[nextIndex];
+
+      if (
+        step > 0 &&
+        currentIndex === items.length - 1 &&
+        itemsQuery.hasNextPage
+      ) {
+        const result = await itemsQuery.fetchNextPage();
+        list = flattenItemPages(result.data ?? itemsQuery.data);
+        nextIndex = currentIndex + 1;
+      }
+
+      const next = list[nextIndex];
+      if (!next) {
+        return;
+      }
+
       setSelectedId(next.id);
       window.requestAnimationFrame(() => {
         document
@@ -223,7 +252,7 @@ export default function FeedsList() {
           ?.scrollIntoView({ block: "nearest" });
       });
     },
-    [items, selectedItemId],
+    [items, selectedItemId, itemsQuery],
   );
 
   useEffect(() => {
@@ -316,6 +345,14 @@ export default function FeedsList() {
       feedCounts={feedCounts}
       labels={labels}
       selectedId={selectedItemId}
+      scrollRoot={scrollRef}
+      hasMore={canLoadMore}
+      loadingMore={itemsQuery.isFetchingNextPage}
+      loadMoreError={
+        itemsQuery.isFetchNextPageError ? itemsQuery.error : null
+      }
+      onLoadMore={loadMore}
+      ingesting={ingesting}
       onOpen={openItem}
       onOpening={prepareItemOpen}
       onPrefetchItem={seedItem}

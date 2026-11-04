@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   Circle,
   CircleCheck,
@@ -47,6 +48,12 @@ interface ArticleListProps {
   feedCounts: Record<number, number>;
   labels: Label[];
   selectedId: number | null;
+  scrollRoot: React.RefObject<HTMLElement | null>;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: Error | null;
+  onLoadMore: () => void;
+  ingesting: boolean;
   onOpen: (item: Item) => void;
   onOpening: (item: Item) => void;
   onPrefetchItem: (item: Item) => void;
@@ -331,6 +338,12 @@ export default function ArticleList({
   feedCounts,
   labels,
   selectedId,
+  scrollRoot,
+  hasMore,
+  loadingMore,
+  loadMoreError,
+  onLoadMore,
+  ingesting,
   onOpen,
   onOpening,
   onPrefetchItem,
@@ -343,6 +356,51 @@ export default function ArticleList({
   onClearSearch,
 }: ArticleListProps) {
   const slow = useDelayedFlag(pending, 1500);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore || loadMoreError) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMore();
+        }
+      },
+      // Start fetching before the sentinel is visible so scrolling stays
+      // continuous, and observe inside the reader's own scroll container.
+      { root: scrollRoot.current, rootMargin: "600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, loadMoreError, onLoadMore, scrollRoot]);
+
+  useEffect(() => {
+    // The observer only fires when the sentinel crosses into view. After a
+    // page lands, top up again if the list still does not fill the viewport.
+    if (!hasMore || loadingMore || loadMoreError) {
+      return;
+    }
+    const node = sentinelRef.current;
+    if (!node) {
+      return;
+    }
+    const bottom =
+      scrollRoot.current?.getBoundingClientRect().bottom ?? window.innerHeight;
+    if (node.getBoundingClientRect().top <= bottom + 600) {
+      onLoadMore();
+    }
+  }, [
+    hasMore,
+    items.length,
+    loadMoreError,
+    loadingMore,
+    onLoadMore,
+    scrollRoot,
+  ]);
 
   return (
     <div
@@ -408,8 +466,9 @@ export default function ArticleList({
           onClearSearch={onClearSearch}
         />
       ) : (
-        <div className="divide-y divide-divider">
-          {items.map((item) => {
+        <>
+          <div className="divide-y divide-divider">
+            {items.map((item) => {
             const preview = item.summary ?? excerpt(item.content, 190);
             const opening = openingId === item.id;
             const selected = selectedId === item.id || opening;
@@ -587,7 +646,44 @@ export default function ArticleList({
               </article>
             );
           })}
-        </div>
+          </div>
+
+          <div
+            ref={sentinelRef}
+            className="flex min-h-14 flex-col items-center justify-center gap-1.5 py-4 text-[11px] leading-4 text-muted"
+          >
+            {loadMoreError ? (
+              <span
+                role="alert"
+                className="inline-flex items-center gap-1.5 text-danger"
+              >
+                <TriangleAlert className="size-3.5" aria-hidden="true" />
+                {errorMessage(loadMoreError)}
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-4 px-1 text-[11px]"
+                  onClick={onLoadMore}
+                >
+                  Retry
+                </Button>
+              </span>
+            ) : loadingMore || ingesting ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Loader2
+                  className="size-3.5 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+                Loading more…
+              </span>
+            ) : hasMore ? (
+              <span className="text-faint">Scroll for more</span>
+            ) : (
+              <span className="text-faint">End of the list</span>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
