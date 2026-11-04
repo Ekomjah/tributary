@@ -65,6 +65,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAMESPACE }}/tributary-${{ matrix.name }}
           tags: |
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
@@ -103,7 +104,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: tag
-        run: echo "value=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: echo "value=sha-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Run from the compose file alone
         env:
