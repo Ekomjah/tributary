@@ -53,7 +53,7 @@ This is a homage to the style, not a copy. Do not use Google logos, the Google w
 
   /* type */
   --font: "Arimo", Arial, Helvetica, sans-serif;     /* free Arial-metric font */
-  --font-mono: "Roboto Mono", ui-monospace, monospace;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
   --text-sm: 11px;     /* counts, meta */
   --text-base: 13px;   /* body, rows */
   --text-md: 15px;     /* item headlines, section titles */

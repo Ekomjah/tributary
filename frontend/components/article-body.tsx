@@ -8,9 +8,10 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { Loader2, Sparkles, TriangleAlert } from "lucide-react";
+import { Loader2, RotateCcw, Sparkles, TriangleAlert } from "lucide-react";
 
 import { ArticleImage, useArticleImages } from "@/components/article-image";
+import { Button } from "@/components/ui/button";
 import {
   collectArticleImages,
   galleryIndexForSrc,
@@ -22,9 +23,11 @@ import { contentBlocks } from "@/lib/text";
 import type { FetchStatus, Item } from "@/lib/types";
 
 const FAILURE_COPY: Record<Exclude<FetchStatus, "ok">, string> = {
-  blocked: "This page is paywalled or blocked automated readers.",
-  empty: "The page did not contain readable article text.",
-  error: "The page could not be reached.",
+  blocked:
+    "This page blocked the reader, asked for a browser check, or sits behind a login or paywall.",
+  empty:
+    "The page did not contain readable article text. Some sites only publish a short summary.",
+  error: "The page could not be reached. The site may be down or refusing connections.",
 };
 
 export function HashtagText({ text }: { text: string }) {
@@ -54,6 +57,7 @@ interface ArticleBodyProps {
   item: Item;
   fetching?: boolean;
   className?: string;
+  onRetry?: () => void;
   onGalleryChange?: (images: GalleryImage[]) => void;
   onOpenGallery?: (index: number) => void;
 }
@@ -62,6 +66,7 @@ export default function ArticleBody({
   item,
   fetching = false,
   className,
+  onRetry,
   onGalleryChange,
   onOpenGallery,
 }: ArticleBodyProps) {
@@ -269,6 +274,26 @@ export default function ArticleBody({
                 </>
               )}
             </p>
+            {onRetry && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-2"
+                onClick={onRetry}
+                disabled={fetching}
+              >
+                {fetching ? (
+                  <Loader2
+                    className="size-3.5 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                )}
+                {fetching ? "Retrying…" : "Retry full text"}
+              </Button>
+            )}
           </div>
         )}
 

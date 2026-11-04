@@ -39,8 +39,10 @@
 @theme inline {
   --font-sans: var(--font-arimo), Arial, Helvetica, sans-serif;
   --font-reading: var(--font-open-sans), "Open Sans", system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
-    monospace;
+  /* Keep the explicit family so mono text never inherits the reading font
+     when the Next font variable is missing from a stale dev stylesheet. */
+  --font-mono: var(--font-geist-mono), "Geist Mono", "Geist Mono Fallback",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --color-canvas: var(--bg);
   --color-chrome: var(--chrome);
