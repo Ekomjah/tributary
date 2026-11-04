@@ -55,7 +55,23 @@ The hosted profile is highly rate-limited, because an open signup with an AI mod
 
 Tributary is live at [**tributaries.tech**](https://tributaries.tech). You authenticate with Auth0, add a feed, and build a pipe in the browser. Open any article and choose **Share** to send a private, single-use snapshot to a second account; it lands in **Shared with me**. Signup is open. Each account gets its own library and the fixed rolling quotas above.
 
-If you would rather keep everything on your own machine, the self-hosted build still takes about ten minutes. You need Python 3.10+, [uv](https://docs.astral.sh/uv/), Node with pnpm, and [Ollama](https://ollama.com).
+If you would rather keep everything on your own machine, there are two ways in. The prebuilt images need only Docker with Compose v2, and nothing is cloned or compiled:
+
+```bash
+curl -fLO https://raw.githubusercontent.com/Ekomjah/tributary/v0.1.0/compose.yaml
+printf 'TRIBUTARY_VERSION=v0.1.0\n' > .env
+docker compose up -d
+```
+
+Open `http://localhost:3000`. The reader and the API share one origin: the browser calls `/api/*` on the reader, which proxies to the API, so there is no CORS setup and no API host to configure. Data lives in the `tributary_tributary-data` volume. AI boxes are an optional profile, roughly 2 GB of RAM and a one-time model pull:
+
+```bash
+docker compose --profile ai up -d
+```
+
+Without it, the reader and pipes still work. The images are published for `linux/amd64` and `linux/arm64` as `ghcr.io/ekomjah/tributary-api` and `ghcr.io/ekomjah/tributary-web`.
+
+The source build takes about ten minutes and needs Python 3.10+, [uv](https://docs.astral.sh/uv/), Node with pnpm, and [Ollama](https://ollama.com).
 
 ```bash
 git clone https://github.com/Ekomjah/tributary
@@ -93,7 +109,7 @@ Three things are optional, and all are off until you configure them:
 A free-tier key for SerpApi or Sentry is enough to try those features.
 
 ## Code
-The entire code for Tributary can be viewed on [GitHub](https://github.com/Ekomjah/tributary)
+The entire code for Tributary can be viewed on [GitHub](https://github.com/Ekomjah/tributary). The self-hosted compose file is in the [v0.1.0 release](https://github.com/Ekomjah/tributary/releases/tag/v0.1.0), and both images are on GHCR.
 
 ## How I Built It
 
@@ -109,6 +125,7 @@ The entire code for Tributary can be viewed on [GitHub](https://github.com/Ekomj
 | Local model       | Ollama running `gemma3:1b`                                   | Summaries, meaning filter, relevance notes         |
 | Web search        | SerpApi, opt-in                                              | Results beyond your subscribed feeds               |
 | Monitoring        | Sentry, opt-in                                               | Traces per run, metrics, GenAI spans               |
+| Packaging         | Docker multi-stage builds, compose, GitHub Actions, GHCR     | Versioned self-hosted install without a source checkout |
 
 **A box is a small list transform.** This is the shape of every one of them:
 
@@ -161,8 +178,8 @@ Tributary has two ways to run, and they share the same code. The **hosted** vers
 
 | | Hosted | Self-hosted |
 | --- | --- | --- |
-| Where it runs | Vercel (frontend), Render (backend), Neon (database) | Your machine, usually with Docker |
-| Sign-in | Auth0 | None by default (optional password) |
+| Where it runs | Vercel (frontend), Render (backend), Neon (database) | Your machine, with Docker Compose or from source |
+| Sign-in | Auth0 | None (single user) |
 | Database | PostgreSQL on Neon | SQLite file |
 | AI boxes | Ollama Cloud (opt-in, text leaves your machine) | Local Ollama, `gemma3:1b` by default |
 | Monitoring | Sentry (optional) | Sentry (optional, off by default) |
@@ -252,14 +269,14 @@ flowchart TD
         FE["Frontend<br/>Reader · Visual pipe editor"]
         API["FastAPI backend<br/>API · Feed ingestion · Pipe execution · AI orchestration"]
         DB[("SQLite file<br/>in a Docker volume")]
-        OL["Ollama (local)<br/>gemma3:1b"]
+        OL["Ollama (local)<br/>gemma3:1b<br/>optional ai profile"]
     end
 
     FEEDS["The open web<br/>RSS feeds and articles"]
     OPT["Optional services you turn on yourself<br/>Sentry · SerpApi · ElevenLabs"]
 
     U -->|"http://localhost:3000"| FE
-    FE -->|"http://localhost:8000"| API
+    FE -->|"/api/* rewrite"| API
     API --> DB
     API --> OL
     API -->|"Fetch feeds and articles"| FEEDS
@@ -269,9 +286,9 @@ flowchart TD
 ### What each part does
 
 - **Browser** talks to the app on `localhost`. By default the app only listens on your own machine (`127.0.0.1`), so nobody else on your network can reach it.
-- **Frontend and backend** are the same code as the hosted version, running side by side.
+- **Frontend and backend** are the same code as the hosted version. In Docker they run as two containers behind one published port; the reader rewrites `/api/*` to the `api` service, so there is no CORS hop and no public API host.
 - **SQLite** is a single file that holds your feeds, stars, labels, pipes and results. In Docker it lives in a named volume, so it survives restarts and updates.
-- **Ollama** runs `gemma3:1b` on your own CPU. Article text for the AI boxes never leaves your machine.
+- **Ollama** runs `gemma3:1b` on your own CPU when the optional `ai` profile is started. Article text for the AI boxes never leaves your machine.
 - **The open web** is the only outside traffic by default: the app fetches the feeds and articles you subscribe to.
 - **Optional services** (Sentry monitoring, SerpApi search, ElevenLabs voices) are off until you add their keys.
 
@@ -279,11 +296,16 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A["docker compose up"] --> B["Backend starts<br/>runs database migrations"]
-    B --> C["Frontend starts"]
-    C --> D["Ollama ready<br/>(pull gemma3:1b once)"]
-    D --> E["Open http://localhost:3000"]
+    A["docker compose up"] --> B["API starts<br/>runs database migrations"]
+    B --> C["Reader starts<br/>one published port"]
+    C --> D["Open http://localhost:3000"]
+    D -. "optional" .-> E["docker compose --profile ai up -d<br/>pulls gemma3:1b once"]
 ```
+
+### How it ships
+
+The self-hosted images are built by GitHub Actions for `linux/amd64` and `linux/arm64` and published to GHCR. A tag such as `v0.1.0` publishes the version tag and `latest`. The same workflow copies the compose file into a clean directory, pulls the pushed images, and checks one origin, the `/api/*` proxy, the SQLite volume, a restart, non-root execution, and the AI-off hint. The README keeps the pinned download and the `tar` backup command.
+
 ---
 
 ## Choosing between them
@@ -316,6 +338,10 @@ flowchart LR
 
 **A share link is not the article URL.** The obvious implementation hands the recipient the item's `link` and lets them subscribe to the sender's feed. That breaks as soon as the feed is deleted, and it shares a subscription when the sender meant to share one story. The fix was a separate `/shared/<token>` URL backed by a snapshot in the `shares` row. The raw token is shown once and stored only as a SHA-256 hash; the claim is a conditional `UPDATE ... WHERE claimed_at IS NULL`, so two people cannot both redeem it. Links expire after 30 days, and because the copy comes from the snapshot, a claim still works after the source item is gone.
 
+**The backup command archived the wrong volume.** Compose prefixes a named volume with the project name, so the first version's `-v tributary-data` mounted an empty volume instead of `tributary_tributary-data`. The README now runs `tar` through a one-off `api` container with `docker compose run --no-deps --entrypoint tar`, which uses the service's own volume and cannot drift from the compose file.
+
+**The release tag and the image tag disagreed.** The image metadata's semver rule strips the leading `v`, so a `v0.1.0` git tag would have published `0.1.0` while the README pinned `v0.1.0`. A tag-name rule now publishes the version verbatim, and the release workflow smoke-tests the pushed `sha-*` tag.
+
 ## Why Does Open Innovation Matter?
 
 Google Reader and Yahoo Pipes are not gone because they were bad. They are gone because they lived on someone else's server and that someone changed their mind. That is the whole argument for open, and it shaped Tributary:
@@ -334,6 +360,10 @@ Google Reader and Yahoo Pipes are not gone because they were bad. They are gone 
 Tributary was built in a human-agent collaborative effort where my agent (OpenCode) wrote most of the code while I stood behind to monitor its output, guide it through decisions and decide the design language for the app
 
 {% agent_session 1367 %}
+
+The Docker packaging and v0.1.0 release work is in its own session:
+
+{% agent_session 1370 %}
 
 ## The Spirit of It
 
