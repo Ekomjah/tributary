@@ -708,3 +708,326 @@ def test_article_fetch_refuses_redirect_to_private_address(
     assert requests == ["https://example.com/post"]
     assert result.status == "error"
     assert item.fetch_status == "error"
+
+
+CHALLENGE_PAGE = b"""
+<html><head><title>Reddit</title></head><body>
+  <form action="/r/technology/comments/abc/post/">
+    <input name="solution" type="hidden">
+    <input name="js_challenge" type="hidden" value="1">
+    <input name="jsc_token" type="hidden" value="abc">
+  </form>
+</body></html>
+"""
+
+
+def test_js_challenge_is_blocked_without_running_extraction(
+    db_session: Session,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = make_item(db_session, content="")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=CHALLENGE_PAGE,
+        )
+
+    def fail_extract(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("challenge pages must not reach trafilatura")
+
+    monkeypatch.setattr(articles.trafilatura, "extract", fail_extract)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "blocked"
+    assert result.reason == "js_challenge"
+    assert item.fetch_status == "blocked"
+    assert item.content_full is None
+
+
+def test_json_ld_article_body_is_used_when_visible_text_is_short(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    body = "A complete article body from structured data. " * 20
+    page = (
+        "<html><head>"
+        '<script type="application/ld+json">'
+        + '{"@type": "NewsArticle", "articleBody": "'
+        + body.replace('"', '\\"')
+        + '"}'
+        + "</script></head><body><p>Too short.</p></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "structured_data"
+    assert "structured data" in (item.content_full or "")
+
+
+def test_meta_description_is_used_when_the_page_has_no_article(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    description = "A substantial summary published in the page metadata. " * 12
+    page = (
+        "<html><head>"
+        f'<meta name="description" content="{description}">'
+        "</head><body><p>Too short.</p></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "meta_description"
+    assert "published in the page metadata" in (item.content_full or "")
+
+
+def test_pdf_response_is_recorded_with_a_reason(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            content=b"%PDF-1.7",
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "empty"
+    assert result.reason == "pdf"
+    assert item.fetch_status == "empty"
+
+
+def test_long_feed_description_can_be_trusted_opt_in(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    description = "A long description from the feed. " * 30
+    item = make_item(db_session, content=description)
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("the trusted feed body should skip the network")
+
+    active = settings.model_copy(
+        update={
+            "article_delay_seconds": 0,
+            "article_trust_long_description": True,
+        }
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=active,
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "feed_fallback"
+    assert result.fetched is False
+    assert item.content_full == description.strip()
+
+
+REDDIT_CHALLENGE = CHALLENGE_PAGE
+
+REDDIT_LINK_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Reddit thread</title>
+  <entry>
+    <id>t3_abc</id>
+    <title>Reddit thread</title>
+    <link href="https://www.reddit.com/r/technology/comments/abc/post/" />
+    <content type="html"><![CDATA[
+      <table><tr><td>
+        <a href="https://www.reddit.com/r/technology/comments/abc/post/"><img src="https://preview.redd.it/a.jpg"></a>
+        submitted by <a href="https://www.reddit.com/user/someone">/u/someone</a>
+        <a href="https://example.com/story">[link]</a>
+        <a href="https://www.reddit.com/r/technology/comments/abc/post/">[comments]</a>
+      </td></tr></table>
+    ]]></content>
+  </entry>
+</feed>
+"""
+
+REDDIT_SELF_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Reddit self post</title>
+  <entry>
+    <id>t3_abc</id>
+    <title>Reddit self post</title>
+    <link href="https://www.reddit.com/r/technology/comments/abc/post/" />
+    <content type="html"><![CDATA[
+      <div class="md"><p>This is the complete text of a Reddit self post.</p></div>
+    ]]></content>
+  </entry>
+</feed>
+"""
+
+
+def test_reddit_recovery_follows_one_external_link(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(
+        db_session,
+        content="",
+        link="https://www.reddit.com/r/technology/comments/abc/post/",
+    )
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.path.endswith("/.rss"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/atom+xml"},
+                content=REDDIT_LINK_RSS.encode(),
+            )
+        if request.url.host == "www.reddit.com":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                content=REDDIT_CHALLENGE,
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=article_html().encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "reddit_link"
+    assert "substantial sentence" in (item.content_full or "")
+    assert any(url.endswith("/.rss") for url in requests)
+    assert "https://example.com/story" in requests
+
+
+def test_reddit_recovery_uses_the_self_post_body(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(
+        db_session,
+        content="",
+        link="https://www.reddit.com/r/technology/comments/abc/post/",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/.rss"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/atom+xml"},
+                content=REDDIT_SELF_RSS.encode(),
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=REDDIT_CHALLENGE,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "reddit_self"
+    assert "complete text of a Reddit self post" in (item.content_full or "")
+    assert "submitted by" not in (item.content_full or "")
+
+
+def test_reddit_link_post_without_body_stays_empty(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(
+        db_session,
+        content="",
+        link="https://www.reddit.com/r/technology/comments/abc/post/",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/.rss"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/atom+xml"},
+                content=REDDIT_LINK_RSS.encode(),
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=REDDIT_CHALLENGE,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    # The external link resolves to the challenge page in this mock, so there
+    # is no body to keep and the reader must not show Reddit boilerplate.
+    assert result.status == "blocked"
+    assert item.content_full is None

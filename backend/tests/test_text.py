@@ -169,6 +169,36 @@ def test_sanitize_html_flattens_nested_pre_blocks() -> None:
     assert cleaned == "<pre>print(1)</pre>"
 
 
+def test_sanitize_html_restores_inline_code_in_a_paragraph() -> None:
+    cleaned = sanitize_html("<p>Use <pre>npm install</pre> to set up.</p>")
+
+    assert cleaned == "<p>Use <code>npm install</code> to set up.</p>"
+
+
+def test_sanitize_html_restores_inline_code_in_a_list_item() -> None:
+    cleaned = sanitize_html("<ul><li>Run <pre>npm install</pre> now.</li></ul>")
+
+    assert cleaned is not None
+    assert "Run <code>npm install</code> now." in cleaned
+    assert "<pre>" not in cleaned
+
+
+def test_sanitize_html_keeps_a_one_line_block_in_a_list_item() -> None:
+    cleaned = sanitize_html("<ul><li>Example:<pre>npm install</pre></li></ul>")
+
+    assert cleaned is not None
+    assert "<pre>npm install</pre>" in cleaned
+    assert "<code>" not in cleaned
+
+
+def test_sanitize_html_keeps_a_multiline_block_in_a_list_item() -> None:
+    cleaned = sanitize_html("<ul><li>Example:<pre>first\nsecond</pre></li></ul>")
+
+    assert cleaned is not None
+    assert "<pre>first\nsecond</pre>" in cleaned
+    assert "<code>" not in cleaned
+
+
 def test_sanitize_html_demotes_body_headings_below_the_page_title() -> None:
     cleaned = sanitize_html("<h1>Section</h1><h3>Subsection</h3>")
 

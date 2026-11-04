@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
 import time
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
+import feedparser
 import httpx
 import sentry_sdk
 import trafilatura
@@ -18,12 +20,16 @@ from ..config import Settings
 from ..db import end_transaction, utcnow
 from ..models import Item
 from ..schemas import FetchStatus
+from .feeds import normalize_url
+from .pagekind import PageKind, classify_page
 from .text import (
     clean_byline,
     clean_meta_text,
+    html_to_text,
     image_alt_for,
     is_promo_image,
     leading_image,
+    normalize_text,
     safe_image_url,
     sanitize_html,
     strip_leading_image,
@@ -48,6 +54,17 @@ _DOMAIN_REGISTRY_LOCK = threading.Lock()
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+_REDDIT_HOSTS = frozenset(
+    {
+        "reddit.com",
+        "www.reddit.com",
+        "old.reddit.com",
+        "np.reddit.com",
+        "m.reddit.com",
+    }
+)
+_REDDIT_THREAD = re.compile(r"^/(?:r/[^/]+/)?comments/[a-z0-9]+(?:/|$)", re.IGNORECASE)
+_REDDIT_RSS_LINK = re.compile(r"^\[?link\]?$", re.IGNORECASE)
 _METADATA_LABEL = re.compile(
     r"^(?:published|updated|last updated|posted)"
     r"(?:\s*(?:on\s+)?[:,-]?\s*(?:\d.*|today.*|yesterday.*|just now.*))?$"
@@ -71,6 +88,7 @@ class ArticleResult:
     truncated: bool = False
     bytes_read: int = 0
     error: str | None = None
+    reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -125,6 +143,7 @@ def fetch_article(
             status=item.fetch_status,  # type: ignore[arg-type]
             text=text,
             fetched=False,
+            reason="cached",
         )
 
     if not force and item.content_full:
@@ -134,10 +153,30 @@ def fetch_article(
         if item.content_fetched_at is None:
             item.content_fetched_at = utcnow()
         session.flush()
-        return ArticleResult(status="ok", text=text, fetched=False)
+        return ArticleResult(status="ok", text=text, fetched=False, reason="content_full")
 
     if not item.link:
-        return _store(session, item, ArticleResult(status="empty", error="no link"))
+        return _store(
+            session,
+            item,
+            ArticleResult(status="empty", error="no link", reason="no_link"),
+        )
+
+    # A long feed body is already the article for some publishers. Promoting it
+    # is opt-in because many feeds use a long description as a teaser.
+    if (
+        not force
+        and settings.article_trust_long_description
+        and item.content.strip()
+        and len(item.content.strip()) >= settings.article_min_chars
+    ):
+        text = item.content.strip()
+        item.content_full = text
+        item.fetch_status = "ok"
+        if item.content_fetched_at is None:
+            item.content_fetched_at = utcnow()
+        session.flush()
+        return ArticleResult(status="ok", text=text, fetched=False, reason="feed_fallback")
 
     host = urlsplit(item.link).hostname or "unknown"
     started = time.perf_counter()
@@ -154,8 +193,23 @@ def fetch_article(
             settings=settings,
             client=client,
         )
+        if (
+            result.status == "empty"
+            and settings.article_trust_long_description
+            and item.content.strip()
+            and len(item.content.strip()) >= settings.article_min_chars
+        ):
+            result = ArticleResult(
+                status="ok",
+                text=item.content.strip(),
+                fetched=True,
+                truncated=result.truncated,
+                bytes_read=result.bytes_read,
+                reason="feed_fallback",
+            )
         elapsed_ms = (time.perf_counter() - started) * 1000
         span.set_data("article.status", result.status)
+        span.set_data("article.reason", result.reason or "unknown")
         span.set_data("article.bytes", result.bytes_read)
         span.set_data("article.chars", len(result.text or ""))
         span.set_data("article.html_chars", len(result.html or ""))
@@ -164,6 +218,18 @@ def fetch_article(
         if result.status == "error":
             span.set_status("internal_error")
         _record_metrics(result, elapsed_ms)
+        logger.info(
+            "article fetch host=%s status=%s reason=%s bytes=%d chars=%d "
+            "html_chars=%d truncated=%s duration_ms=%.1f",
+            host,
+            result.status,
+            result.reason or "unknown",
+            result.bytes_read,
+            len(result.text or ""),
+            len(result.html or ""),
+            result.truncated,
+            elapsed_ms,
+        )
 
     return _store(session, item, result)
 
@@ -278,6 +344,7 @@ def _fetch_page(
     title: str,
     settings: Settings,
     client: httpx.Client | None,
+    allow_reddit: bool = True,
 ) -> ArticleResult:
     owns_client = client is None
     active_client = client or make_client(settings)
@@ -287,31 +354,86 @@ def _fetch_page(
         try:
             response, final_url = _open_page(active_client, url, settings)
             _raise_for_status(response)
+            if _is_pdf(response, final_url):
+                return ArticleResult(status="empty", reason="pdf")
             if not _is_html(response):
-                return ArticleResult(status="empty", error="not html")
+                return ArticleResult(status="empty", error="not html", reason="not_html")
 
             body, truncated = _read_capped(response, settings.article_max_bytes)
             if not body:
-                return ArticleResult(status="empty", error="empty response")
+                return ArticleResult(
+                    status="empty",
+                    error="empty response",
+                    reason="empty_response",
+                )
         except httpx.HTTPStatusError as exc:
-            status = _status_for_http(exc.response.status_code)
+            status_code = exc.response.status_code
+            status = _status_for_http(status_code)
+            body = _read_error_body(exc.response, settings.article_max_bytes)
+            reason = _http_reason(
+                status_code,
+                body,
+                settings.article_min_chars,
+            )
+            if reason in {"js_challenge", "login_required", "paywall"}:
+                status = "blocked"
+            if reason == "js_challenge" and allow_reddit and _is_reddit_thread(url):
+                recovered = _recover_reddit(
+                    url,
+                    title=title,
+                    settings=settings,
+                    client=active_client,
+                )
+                if recovered is not None:
+                    return recovered
             _capture_error(exc, host=host, status=status)
             return ArticleResult(
                 status=status,
-                error=f"HTTP {exc.response.status_code}",
+                error=f"HTTP {status_code}",
+                reason=reason,
             )
         except UnsafeUrlError as exc:
             _capture_error(exc, host=host, status="error")
-            return ArticleResult(status="error", error="unsafe url")
+            return ArticleResult(status="error", error="unsafe url", reason="unsafe_url")
         except ArticleFetchError as exc:
             _capture_error(exc, host=host, status="error")
-            return ArticleResult(status="error", error=str(exc))
+            message = str(exc)
+            reason = "timeout" if "timed out" in message.lower() else "fetch_error"
+            return ArticleResult(status="error", error=message, reason=reason)
+        except httpx.TimeoutException as exc:
+            _capture_error(exc, host=host, status="error")
+            return ArticleResult(status="error", error=type(exc).__name__, reason="timeout")
         except httpx.HTTPError as exc:
             _capture_error(exc, host=host, status="error")
-            return ArticleResult(status="error", error=type(exc).__name__)
+            return ArticleResult(
+                status="error",
+                error=type(exc).__name__,
+                reason="network_error",
+            )
         finally:
             if response is not None:
                 response.close()
+
+        # A challenge page carries no article. Detect it before trafilatura
+        # runs, both to classify it correctly and to keep its noise out of the
+        # extraction log.
+        early = classify_page(body, status_code=response.status_code)
+        if early.kind is PageKind.JS_CHALLENGE:
+            if allow_reddit and _is_reddit_thread(url):
+                recovered = _recover_reddit(
+                    url,
+                    title=title,
+                    settings=settings,
+                    client=active_client,
+                )
+                if recovered is not None:
+                    return recovered
+            return ArticleResult(
+                status="blocked",
+                truncated=truncated,
+                bytes_read=len(body),
+                reason="js_challenge",
+            )
 
         try:
             extracted = trafilatura.extract(
@@ -340,18 +462,94 @@ def _fetch_page(
                 truncated=truncated,
                 bytes_read=len(body),
                 error=type(exc).__name__,
+                reason="extract_error",
             )
 
+        metadata = _extract_page_metadata(body, final_url)
         text = _strip_leading_title((extracted or "").strip(), title)
         if len(text) < settings.article_min_chars:
+            classification = classify_page(
+                body,
+                status_code=response.status_code,
+                extracted_chars=len(text),
+                min_chars=settings.article_min_chars,
+            )
+            if classification.kind is PageKind.JS_CHALLENGE:
+                if allow_reddit and _is_reddit_thread(url):
+                    recovered = _recover_reddit(
+                        url,
+                        title=title,
+                        settings=settings,
+                        client=active_client,
+                    )
+                    if recovered is not None:
+                        return recovered
+                return ArticleResult(
+                    status="blocked",
+                    truncated=truncated,
+                    bytes_read=len(body),
+                    reason="js_challenge",
+                )
+            if classification.kind is PageKind.LOGIN_REQUIRED:
+                return ArticleResult(
+                    status="blocked",
+                    truncated=truncated,
+                    bytes_read=len(body),
+                    reason="login_required",
+                )
+            if classification.kind is PageKind.PAYWALL:
+                return ArticleResult(
+                    status="blocked",
+                    truncated=truncated,
+                    bytes_read=len(body),
+                    reason="paywall",
+                )
+
+            structured = _structured_data(body, final_url)
+            if structured is not None and len(structured[0]) >= settings.article_min_chars:
+                fallback_text, fallback_html = structured
+                cover_image, cover_image_alt, cover_caption = _choose_cover(
+                    fallback_html,
+                    metadata,
+                )
+                return ArticleResult(
+                    status="ok",
+                    text=fallback_text,
+                    html=fallback_html,
+                    author=metadata.author,
+                    cover_image=cover_image,
+                    cover_image_alt=cover_image_alt,
+                    cover_caption=cover_caption,
+                    fetched=True,
+                    truncated=truncated,
+                    bytes_read=len(body),
+                    reason="structured_data",
+                )
+
+            description = _meta_description(body, final_url)
+            if description is not None and len(description) >= settings.article_min_chars:
+                cover_image, cover_image_alt, cover_caption = _choose_cover(None, metadata)
+                return ArticleResult(
+                    status="ok",
+                    text=description,
+                    author=metadata.author,
+                    cover_image=cover_image,
+                    cover_image_alt=cover_image_alt,
+                    cover_caption=cover_caption,
+                    fetched=True,
+                    truncated=truncated,
+                    bytes_read=len(body),
+                    reason="meta_description",
+                )
+
             return ArticleResult(
                 status="empty",
                 text=None,
                 truncated=truncated,
                 bytes_read=len(body),
+                reason="too_short",
             )
 
-        metadata = _extract_page_metadata(body, final_url)
         html = _strip_leading_heading(
             sanitize_html(extracted_html or "", base_url=final_url),
             title,
@@ -373,10 +571,263 @@ def _fetch_page(
             fetched=True,
             truncated=truncated,
             bytes_read=len(body),
+            reason="extracted",
         )
     finally:
         if owns_client:
             active_client.close()
+
+
+def _is_pdf(response: httpx.Response, final_url: str) -> bool:
+    content_type = response.headers.get("content-type", "").lower()
+    return "application/pdf" in content_type or urlsplit(final_url).path.lower().endswith(".pdf")
+
+
+def _read_error_body(response: httpx.Response, max_bytes: int) -> bytes:
+    """Read a small error response so a challenge page can still be classified."""
+
+    if response.is_stream_consumed:
+        return b""
+    try:
+        body, _truncated = _read_capped(response, min(max_bytes, 128_000))
+        return body
+    except Exception:  # pragma: no cover - an unreadable error body is not fatal
+        return b""
+
+
+def _http_reason(status_code: int, body: bytes, min_chars: int) -> str:
+    if body:
+        classification = classify_page(
+            body,
+            status_code=status_code,
+            extracted_chars=0,
+            min_chars=min_chars,
+        )
+        if classification.kind is PageKind.JS_CHALLENGE:
+            return "js_challenge"
+        if classification.kind is PageKind.LOGIN_REQUIRED:
+            return "login_required"
+        if classification.kind is PageKind.PAYWALL:
+            return "paywall"
+    return f"http_{status_code}"
+
+
+def _json_nodes(value: object):
+    """Yield every dictionary inside a parsed JSON-LD document."""
+
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                yield from _json_nodes(child)
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                yield from _json_nodes(child)
+
+
+def _structured_data(body: bytes, url: str) -> tuple[str, str | None] | None:
+    """Return an article body published in JSON-LD, when one is present."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    for script in soup.find_all("script"):
+        content_type = str(script.get("type") or "").lower()
+        if "ld+json" not in content_type:
+            continue
+        raw = script.string if script.string is not None else script.get_text()
+        if not raw or not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+
+        for node in _json_nodes(payload):
+            candidate = node.get("articleBody")
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            if "<" in candidate:
+                text = html_to_text(candidate).strip()
+                html = sanitize_html(candidate, base_url=url)
+            else:
+                text = normalize_text(candidate).strip()
+                html = None
+            if text:
+                return text, html
+    return None
+
+
+def _meta_description(body: bytes, url: str) -> str | None:
+    """Return the longest useful page description, when the page has one."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    best: str | None = None
+    for attrs in (
+        {"property": "og:description"},
+        {"name": "og:description"},
+        {"name": "description"},
+        {"name": "twitter:description"},
+    ):
+        tag = soup.find("meta", attrs=attrs)
+        if tag is None:
+            continue
+        value = str(tag.get("content") or "").strip()
+        if not value:
+            continue
+        text = html_to_text(value).strip()
+        if text and (best is None or len(text) > len(best)):
+            best = text
+    return best
+
+
+def _is_reddit_thread(url: str) -> bool:
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    return host in _REDDIT_HOSTS and bool(_REDDIT_THREAD.match(parts.path))
+
+
+def _reddit_rss_url(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    return urlunsplit(("https", "www.reddit.com", f"{path}/.rss", "", ""))
+
+
+def _recover_reddit(
+    url: str,
+    *,
+    title: str,
+    settings: Settings,
+    client: httpx.Client,
+) -> ArticleResult | None:
+    """Read a Reddit thread through its public Atom feed.
+
+    Reddit serves a proof-of-work challenge to plain HTML clients. Its ``.rss``
+    endpoint stays public, so use the thread entry for a self-post body and
+    follow at most one external ``[link]`` to the real article.
+    """
+
+    response: httpx.Response | None = None
+    try:
+        try:
+            response, _final_url = _open_page(client, _reddit_rss_url(url), settings)
+            if response.status_code >= 400:
+                return None
+            body, _truncated = _read_capped(response, settings.article_max_bytes)
+        finally:
+            if response is not None:
+                response.close()
+    except (ArticleFetchError, UnsafeUrlError, httpx.HTTPError):
+        return None
+
+    if not body:
+        return None
+
+    parsed = feedparser.parse(body)
+    entry = _reddit_post_entry(parsed.entries, url)
+    if entry is None:
+        return None
+
+    raw = _entry_content_value(entry)
+    external = _reddit_external_link(raw, url)
+    if external:
+        link_host = urlsplit(external).hostname or "unknown"
+        result = _fetch_page(
+            external,
+            host=link_host,
+            title=title,
+            settings=settings,
+            client=client,
+            allow_reddit=False,
+        )
+        if result.status == "ok":
+            result.reason = "reddit_link"
+            return result
+        self_post = _reddit_body_result(raw, url)
+        return self_post or result
+
+    return _reddit_body_result(raw, url)
+
+
+def _reddit_post_entry(entries: list[object], url: str) -> object | None:
+    target = normalize_url(url).rstrip("/")
+    for entry in entries:
+        if not hasattr(entry, "get"):
+            continue
+        entry_id = str(entry.get("id") or "")
+        if entry_id.startswith("t3_"):
+            return entry
+        link = str(entry.get("link") or "")
+        if link and normalize_url(link).rstrip("/") == target:
+            return entry
+    return entries[0] if entries else None
+
+
+def _entry_content_value(entry: object) -> str:
+    content = entry.get("content") if hasattr(entry, "get") else None
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("value"):
+                return str(part["value"])
+    elif isinstance(content, dict) and content.get("value"):
+        return str(content["value"])
+    if hasattr(entry, "get"):
+        return str(entry.get("summary") or "")
+    return ""
+
+
+def _reddit_external_link(raw: str, base_url: str) -> str | None:
+    soup = BeautifulSoup(raw, "html.parser")
+    for anchor in soup.find_all("a", href=True):
+        label = " ".join(anchor.get_text(" ", strip=True).split())
+        if not _REDDIT_RSS_LINK.match(label):
+            continue
+        href = urljoin(base_url, str(anchor.get("href") or "").strip())
+        parts = urlsplit(href)
+        host = (parts.hostname or "").lower()
+        if parts.scheme.lower() not in {"http", "https"} or not host:
+            continue
+        if (
+            host in _REDDIT_HOSTS
+            or host.endswith(".reddit.com")
+            or host in {"redd.it", "www.redd.it"}
+        ):
+            continue
+        return href
+    return None
+
+
+def _reddit_body(raw: str, url: str) -> tuple[str, str | None]:
+    soup = BeautifulSoup(raw, "html.parser")
+
+    # Link posts put the thumbnail, submitter and [link] / [comments] markers
+    # in a table. That table is not article text.
+    for table in soup.find_all("table"):
+        if "submitted by" in table.get_text(" ", strip=True).lower():
+            table.decompose()
+    for anchor in soup.find_all("a"):
+        if _REDDIT_RSS_LINK.match(" ".join(anchor.get_text(" ", strip=True).split())):
+            anchor.decompose()
+
+    cleaned = str(soup)
+    text = html_to_text(cleaned).strip()
+    html = sanitize_html(cleaned, base_url=url) if text else None
+    if html:
+        text = html_to_text(html).strip() or text
+    return text, html
+
+
+def _reddit_body_result(raw: str, url: str) -> ArticleResult | None:
+    text, html = _reddit_body(raw, url)
+    if not text:
+        return None
+    return ArticleResult(
+        status="ok",
+        text=text,
+        html=html,
+        fetched=True,
+        bytes_read=len(raw.encode("utf-8")),
+        reason="reddit_self",
+    )
 
 
 def _open_page(
@@ -623,23 +1074,27 @@ def _capture_error(exc: Exception, *, host: str, status: FetchStatus) -> None:
 
 
 def _record_metrics(result: ArticleResult, elapsed_ms: float) -> None:
+    attributes = {
+        "status": result.status,
+        "reason": result.reason or "unknown",
+    }
     try:
         sentry_sdk.metrics.count(
             "article.fetch",
             1,
-            attributes={"status": result.status},
+            attributes=attributes,
         )
         sentry_sdk.metrics.distribution(
             "article.fetch.duration",
             elapsed_ms,
             unit="millisecond",
-            attributes={"status": result.status},
+            attributes=attributes,
         )
         if result.text:
             sentry_sdk.metrics.distribution(
                 "article.chars",
                 len(result.text),
-                attributes={"status": result.status},
+                attributes=attributes,
             )
     except Exception:  # pragma: no cover - telemetry must never break extraction
         logger.debug("Sentry article metrics failed", exc_info=True)

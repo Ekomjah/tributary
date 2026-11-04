@@ -256,6 +256,15 @@ class Settings(BaseSettings):
             "ARTICLE_MIN_CHARS",
         ),
     )
+    # Some publishers put the whole article in <description>. Promoting every
+    # long description would turn teasers into fake full text, so it is opt-in.
+    article_trust_long_description: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_TRUST_LONG_DESCRIPTION",
+            "ARTICLE_TRUST_LONG_DESCRIPTION",
+        ),
+    )
     serpapi_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("SERPAPI_API_KEY", "TRIBUTARY_SERPAPI_API_KEY"),

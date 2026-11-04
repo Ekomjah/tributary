@@ -185,6 +185,49 @@ _NO_PARAGRAPH_PARENTS = (
     "pre",
 )
 
+# Inline hosts whose text should flow with the surrounding prose. A <pre>
+# inside one of these is block markup written where an inline span belongs.
+_INLINE_CODE_HOSTS = {
+    "a",
+    "abbr",
+    "b",
+    "bdi",
+    "bdo",
+    "cite",
+    "code",
+    "data",
+    "dd",
+    "del",
+    "dfn",
+    "dt",
+    "em",
+    "figcaption",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "i",
+    "ins",
+    "kbd",
+    "mark",
+    "p",
+    "q",
+    "s",
+    "samp",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "td",
+    "th",
+    "time",
+    "u",
+    "var",
+}
+
 
 def unescape_all(value: str, *, max_passes: int = 5) -> str:
     """Decode HTML entities until the text stops changing.
@@ -280,6 +323,53 @@ def _wrap_loose_inline(soup: BeautifulSoup) -> None:
     flush()
 
 
+def _sibling_text(node: Tag, *, previous: bool) -> str:
+    """Return the text a sibling run contributes before or after ``node``."""
+
+    siblings = node.previous_siblings if previous else node.next_siblings
+    parts: list[str] = []
+    for sibling in siblings:
+        if isinstance(sibling, NavigableString):
+            parts.append(str(sibling))
+        elif isinstance(sibling, Tag):
+            parts.append(sibling.get_text())
+    return "".join(parts).strip()
+
+
+def _restore_inline_code(soup: BeautifulSoup) -> None:
+    """Turn block markup used for inline code back into an inline span.
+
+    Trafilatura's HTML output serializes every ``<code>`` element, inline or
+    fenced, as ``<pre>``. The HTML5 sanitizer then hoists a ``<pre>`` out of its
+    paragraph because it is block-level, which gives each inline snippet its own
+    line. A single-line ``<pre>`` inside an inline host is code the source wrote
+    as inline; restore the element name before nh3 sees it.
+    """
+
+    for pre in soup.find_all("pre"):
+        if pre.find_parent("pre") is not None:
+            continue
+
+        text = pre.get_text()
+        if "\n" in text.strip():
+            continue
+
+        host = pre.parent.name if pre.parent is not None else ""
+        if host in _INLINE_CODE_HOSTS:
+            pre.name = "code"
+            continue
+
+        if host != "li":
+            continue
+
+        before = _sibling_text(pre, previous=True)
+        after = _sibling_text(pre, previous=False)
+        # A bare one-line block at the start of a list item is a real code
+        # block. Text on either side means the code is part of the sentence.
+        if after or (before and not before.endswith((":", ".", "!", "?"))):
+            pre.name = "code"
+
+
 def _normalize_structure(soup: BeautifulSoup) -> None:
     """Give a feed fragment the block structure the reader styles expect."""
 
@@ -293,6 +383,8 @@ def _normalize_structure(soup: BeautifulSoup) -> None:
             tag.unwrap()
         else:
             tag.name = "p"
+
+    _restore_inline_code(soup)
 
     for pre in soup.find_all("pre"):
         inner = pre.find("pre")
