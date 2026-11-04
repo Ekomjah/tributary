@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Circle,
   CircleCheck,
   ExternalLink,
+  Images,
   Loader2,
   Share2,
   Sparkles,
@@ -14,8 +15,10 @@ import {
 } from "lucide-react";
 
 import ArticleBody from "@/components/article-body";
+import ArticleImageCarousel from "@/components/article-image-carousel";
 import LabelMenu from "@/components/label-menu";
 import { Button } from "@/components/ui/button";
+import type { GalleryImage } from "@/lib/article-images";
 import { formatFullDate, plainText, readingMinutes } from "@/lib/text";
 import type { Decision, Item, Label } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -59,12 +62,36 @@ export default function ArticleView({
   const readingTime = readingMinutes(plainText(text));
   const published = item.published ?? item.fetched_at;
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const [galleryOwner, setGalleryOwner] = useState(item.id);
+  const [gallery, setGallery] = useState<GalleryImage[]>([]);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+
+  // Switching articles must drop the previous article's gallery before the
+  // children report their images, otherwise the first frame shows stale slides.
+  if (galleryOwner !== item.id) {
+    setGalleryOwner(item.id);
+    setGallery([]);
+    setGalleryIndex(null);
+  }
 
   useEffect(() => {
     if (focusItemId !== null && focusItemId === item.id) {
       headingRef.current?.focus();
     }
   }, [focusItemId, item.id]);
+
+  const handleGalleryChange = useCallback((images: GalleryImage[]) => {
+    setGallery(images);
+    setGalleryIndex((current) => {
+      if (current === null) {
+        return null;
+      }
+      if (images.length === 0) {
+        return null;
+      }
+      return Math.min(current, images.length - 1);
+    });
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-5 max-[700px]:px-4">
@@ -218,6 +245,18 @@ export default function ArticleView({
             </Button>
           )}
 
+          {gallery.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setGalleryIndex(0)}
+            >
+              <Images className="size-3.5" />
+              Images ({gallery.length})
+            </Button>
+          )}
+
           {item.link && (
             <Button
               variant="outline"
@@ -233,7 +272,19 @@ export default function ArticleView({
           )}
         </div>
 
-        <ArticleBody item={item} fetching={fetching} />
+        <ArticleBody
+          item={item}
+          fetching={fetching}
+          onGalleryChange={handleGalleryChange}
+          onOpenGallery={setGalleryIndex}
+        />
+
+        <ArticleImageCarousel
+          images={gallery}
+          index={galleryIndex}
+          onIndexChange={setGalleryIndex}
+          onClose={() => setGalleryIndex(null)}
+        />
 
         <div className="mt-10 border-t border-divider pt-4">
           <div className="flex flex-wrap items-center gap-2">
