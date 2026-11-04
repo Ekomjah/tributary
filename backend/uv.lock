@@ -7,7 +7,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
     "python_full_version < '3.11'",
 ]
@@ -1336,7 +1337,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/27/eeb9f307bf07060f3d9f9aa0fb8c15b01bdfded0a941e4b2719c7f94cacd/pycparser-3.12.tar.gz", hash = "sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6", size = 158785, upload-time = "2026-10-22T13:40:03.56Z" }
@@ -1533,7 +1535,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
 ]
 dependencies = [
@@ -1942,7 +1945,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/63/0b6bae54546aed98d72f12d09df57b19a287f01c84d22047fa2e23772ab9/soupsieve-3.0.4.tar.gz", hash = "sha256:924fab84ae21604c19e175e1f39815eb6fa83ba23836e09e9de180925e5bc4c0", size = 119017, upload-time = "2026-10-22T00:45:26.362Z" }
 wheels = [
@@ -2017,7 +2021,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
 ]
 dependencies = [
@@ -2124,7 +2129,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
 ]
 dependencies = [
@@ -2611,7 +2617,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.11.5' and python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version >= '3.11.5' and python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.5' and python_full_version < '3.12'",
     "python_full_version >= '3.11' and python_full_version < '3.11.5'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/4b/4692be6d5bf739ed049b3813901c42091f8c054df89d5c089343823dea0d/websockets-17.3.tar.gz", hash = "sha256:1c7dd93a1c9f89297471493674b1fc1d9467cafd45374f2172213046bdb3a329", size = 188878, upload-time = "2026-10-19T16:58:05.813Z" }
