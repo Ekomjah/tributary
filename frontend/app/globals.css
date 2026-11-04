@@ -538,6 +538,19 @@
   animation: article-image-fade-in 180ms ease;
 }
 
+.article-image-frame[data-gallery-trigger="true"] {
+  cursor: zoom-in;
+}
+
+.article-image-frame[data-gallery-trigger="true"]:hover img {
+  opacity: 0.92;
+}
+
+.article-image-frame[data-gallery-trigger="true"]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
 .article-image-placeholder {
   display: none;
 }
