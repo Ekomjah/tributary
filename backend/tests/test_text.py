@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from bs4 import BeautifulSoup
+
 from tributary.services.text import (
     clean_byline,
     html_to_text,
     is_promo_image,
     leading_image,
     normalize_text,
+    prose_chars,
     readable_title,
     safe_image_url,
     sanitize_html,
     strip_leading_image,
+    strip_page_chrome,
     titles_match,
     unescape_all,
 )
@@ -286,3 +290,37 @@ def test_strip_leading_image_keeps_a_different_or_captioned_image() -> None:
         captioned,
         None,
     )
+
+
+def test_strip_page_chrome_removes_navigation_and_promo_widgets() -> None:
+    soup = BeautifulSoup(
+        "<nav>Menu</nav><article><p>Body text.</p>"
+        '<aside class="newsletter">Subscribe</aside>'
+        '<div class="share-tools">Share</div>'
+        "<footer>Footer</footer></article>",
+        "html.parser",
+    )
+
+    strip_page_chrome(soup)
+    text = soup.get_text(" ", strip=True)
+
+    assert "Body text." in text
+    for chrome in ("Menu", "Subscribe", "Share", "Footer"):
+        assert chrome not in text
+
+
+def test_strip_page_chrome_can_keep_comment_threads() -> None:
+    html = '<article><p>Post.</p><div class="comments"><p>Reply.</p></div></article>'
+
+    kept = BeautifulSoup(html, "html.parser")
+    strip_page_chrome(kept, comments=False)
+    assert "Reply." in kept.get_text(" ", strip=True)
+
+    removed = BeautifulSoup(html, "html.parser")
+    strip_page_chrome(removed, comments=True)
+    assert "Reply." not in removed.get_text(" ", strip=True)
+
+
+def test_prose_chars_ignores_link_lists_and_counts_paragraphs() -> None:
+    assert prose_chars('<ul><li><a href="/">Home</a></li></ul>') == 0
+    assert prose_chars("<p>" + "x" * 300 + "</p>") == 300

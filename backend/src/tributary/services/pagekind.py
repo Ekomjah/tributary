@@ -6,6 +6,8 @@ from enum import Enum
 
 from bs4 import BeautifulSoup
 
+from .text import strip_invisible
+
 __all__ = [
     "PageClassification",
     "PageKind",
@@ -147,8 +149,15 @@ def classify_page(
     if extracted_chars is None or extracted_chars >= min_chars:
         return PageClassification(PageKind.ARTICLE, signals)
 
-    if _LOGIN.search(text):
+    # Login and paywall wording only counts when a reader can see it. Articles
+    # about bot protection or subscriptions routinely quote these phrases inside
+    # scripts and comments.
+    visible_soup = BeautifulSoup(text, "html.parser")
+    strip_invisible(visible_soup)
+    visible = visible_soup.get_text(" ", strip=True)
+
+    if _LOGIN.search(visible):
         return PageClassification(PageKind.LOGIN_REQUIRED, signals)
-    if _PAYWALL.search(text):
+    if _PAYWALL.search(visible):
         return PageClassification(PageKind.PAYWALL, signals)
     return PageClassification(PageKind.ARTICLE, signals)

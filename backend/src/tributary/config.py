@@ -263,6 +263,17 @@ class Settings(BaseSettings):
             "ARTICLE_MIN_CHARS",
         ),
     )
+    # A short note is still real content when the page declares itself an
+    # article. This floor lets it through without lowering the bar for pages
+    # that only look like articles.
+    article_short_article_floor: int = Field(
+        default=120,
+        ge=1,
+        validation_alias=AliasChoices(
+            "TRIBUTARY_ARTICLE_SHORT_ARTICLE_FLOOR",
+            "ARTICLE_SHORT_ARTICLE_FLOOR",
+        ),
+    )
     # Some publishers put the whole article in <description>. Promoting every
     # long description would turn teasers into fake full text, so it is opt-in.
     article_trust_long_description: bool = Field(
