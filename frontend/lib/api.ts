@@ -24,8 +24,15 @@ import type {
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 
+// Unset keeps the local development default. An explicit empty value, or a
+// bare "/" that collapses to empty, means the browser calls /api/* on the
+// origin that served the page: the self-hosted image is built that way, so one
+// image works on any host and port without a rebuild or CORS. A full URL keeps
+// working for the hosted, cross-origin setup.
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE;
+
 export const apiBase = (
-  process.env.NEXT_PUBLIC_API_BASE ?? DEFAULT_API_BASE
+  configuredApiBase === undefined ? DEFAULT_API_BASE : configuredApiBase
 ).replace(/\/+$/, "");
 
 export class ApiError extends Error {

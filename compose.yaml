@@ -1,0 +1,115 @@
+# Tributary — self-hosted reader and pipe builder.
+#
+#   docker compose up -d                    # reader and pipes, no AI
+#   docker compose --profile ai up -d       # adds Ollama and pulls the model
+#
+# Open http://localhost:3000. Only the reader publishes a port: it serves the
+# app and rewrites /api/* to the API service, so the browser sees one origin.
+# Data lives in the tributary-data volume at /data/tributary/tributary.db.
+#
+# Optional settings can be placed in a .env file next to this file:
+#   TRIBUTARY_WEB_PORT=3000      # host port (use 8080 if 3000 is taken)
+#   TRIBUTARY_BIND=127.0.0.1     # use 0.0.0.0 to reach it from another machine
+#   TRIBUTARY_VERSION=latest
+#   OLLAMA_MODEL=gemma3:1b
+#   SERPAPI_API_KEY=
+#   SENTRY_DSN=
+#
+# The AI profile needs roughly 2 GB of free RAM. Without it the reader and
+# pipes still work and AI boxes report that the profile is off.
+#
+# The reader image is built to rewrite /api/* to the service named `api`.
+# Renaming that service produces 502s unless the image is rebuilt with a
+# different API_PROXY_TARGET.
+
+name: tributary
+
+services:
+  api:
+    image: ghcr.io/ekomjah/tributary-api:${TRIBUTARY_VERSION:-latest}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TRIBUTARY_DB_PATH: /data/tributary/tributary.db
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:1b}
+      # Shown when an AI box cannot reach Ollama, which is the normal state
+      # until the optional profile is started.
+      TRIBUTARY_OLLAMA_HINT: "AI is off. Start it with: docker compose --profile ai up -d"
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - tributary-data:/data
+    # Reaching a host-installed Ollama through host.docker.internal needs this
+    # on Linux; it is harmless where the name already resolves.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    image: ghcr.io/ekomjah/tributary-web:${TRIBUTARY_VERSION:-latest}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${TRIBUTARY_BIND:-127.0.0.1}:${TRIBUTARY_WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  # Optional local model. Start it with `--profile ai`; the API never depends
+  # on this service, so the default install stays small.
+  ollama:
+    image: ollama/ollama:0.40.14
+    profiles: ["ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # One-shot: pull the configured model once the server is ready. A second
+  # `up` is a no-op because `ollama show` succeeds.
+  ollama-pull:
+    image: ollama/ollama:0.40.14
+    profiles: ["ai"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        ollama show ${OLLAMA_MODEL:-gemma3:1b} >/dev/null 2>&1 \
+          || ollama pull ${OLLAMA_MODEL:-gemma3:1b}
+    restart: "no"
+
+volumes:
+  tributary-data:
+  ollama-models:

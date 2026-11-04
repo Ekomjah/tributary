@@ -36,6 +36,9 @@ local Ollama server. `make dev` applies the migrations, starts the API at
 <http://127.0.0.1:8000> (docs at `/docs`), and starts the reader at
 <http://localhost:3000>.
 
+To run the same build without cloning the repository, use the
+[Docker images](#docker).
+
 To run the API by itself with the profile loaded:
 
 ```bash
@@ -235,7 +238,59 @@ Sentry is opt-in through `SENTRY_DSN`. Without a DSN the app runs without a Sent
 
 The build stays account-free: SQLite by default, or PostgreSQL when
 `DATABASE_URL` is set. `tributary serve` runs the API and applies migrations on
-startup. The reader is a Next.js app:
+startup.
+
+### Docker
+
+The images are prebuilt, so nothing is cloned or compiled. Download the compose
+file for the release you want, pin that version, and start it:
+
+```bash
+curl -fLO https://raw.githubusercontent.com/Ekomjah/tributary/v0.1.0/compose.yaml
+printf 'TRIBUTARY_VERSION=v0.1.0\n' > .env
+docker compose up -d
+```
+
+Open <http://localhost:3000>. The reader and the API share one origin: the
+browser calls `/api/*` on the reader, which rewrites it to the API service, so
+there is no CORS setup and no API host to configure. Only the reader publishes
+a port.
+
+Data lives in the `tributary-data` volume at `/data/tributary/tributary.db`.
+Back it up with the API stopped:
+
+```bash
+docker compose stop api
+docker run --rm -v tributary-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/tributary-$(date +%F).tgz -C /data tributary
+docker compose start api
+```
+
+Upgrade by changing `TRIBUTARY_VERSION` in `.env`, then:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+AI boxes need the optional Ollama profile, roughly 2 GB of free RAM and a
+one-time model download:
+
+```bash
+docker compose --profile ai up -d
+```
+
+Without it the reader and pipes work, and an AI box reports that the profile is
+off. To use an Ollama server already running on the host, set
+`OLLAMA_HOST=http://host.docker.internal:11434` in `.env` and start that server
+with `OLLAMA_HOST=0.0.0.0 ollama serve`.
+
+`TRIBUTARY_WEB_PORT` changes the published port and `TRIBUTARY_BIND=0.0.0.0`
+exposes it beyond localhost. Images are published for `linux/amd64` and
+`linux/arm64`.
+
+### From source
+
+The reader is a Next.js app:
 
 ```bash
 cd backend

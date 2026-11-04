@@ -378,8 +378,9 @@ def test_ollama_client_ignores_the_hint_in_cloud_mode() -> None:
 
 
 def test_from_settings_only_carries_the_hint_for_local_ollama() -> None:
+    # Pass the mode explicitly: a developer's .env may set OLLAMA_CLOUD.
     local = OllamaModelClient.from_settings(
-        Settings(ollama_hint="Start the ai profile.")
+        Settings(ollama_cloud=False, ollama_hint="Start the ai profile.")
     )
     cloud = OllamaModelClient.from_settings(
         Settings(
