@@ -238,6 +238,14 @@ export default function FeedsArticle({ slug }: { slug: string }) {
         return;
       }
 
+      // Dialogs own Escape, arrows and typing while they are open.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-slot="dialog-content"]')
+      ) {
+        return;
+      }
+
       const target = event.target;
       if (
         target instanceof HTMLElement &&

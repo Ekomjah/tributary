@@ -801,6 +801,14 @@ export default function FeedsShell({
         return;
       }
 
+      // Let an open dialog handle its own keys instead of navigating behind it.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-slot="dialog-content"]')
+      ) {
+        return;
+      }
+
       const target = event.target;
       if (
         target instanceof HTMLElement &&
