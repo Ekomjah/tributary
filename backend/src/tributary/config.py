@@ -158,6 +158,13 @@ class Settings(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("OLLAMA_TIMEOUT", "TRIBUTARY_OLLAMA_TIMEOUT"),
     )
+    # Appended to "could not reach Ollama" errors in local mode. A deployment
+    # that ships Ollama as an optional sidecar uses this to name the command
+    # that starts it; the application itself stays free of deployment details.
+    ollama_hint: str = Field(
+        default="",
+        validation_alias=AliasChoices("OLLAMA_HINT", "TRIBUTARY_OLLAMA_HINT"),
+    )
     host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("TRIBUTARY_HOST", "HOST"),

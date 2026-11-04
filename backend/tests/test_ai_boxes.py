@@ -334,6 +334,65 @@ def test_ollama_client_reports_an_unreachable_server() -> None:
         client.generate_json("private text", schema={"type": "object"})
 
 
+def test_ollama_client_appends_the_deployment_hint() -> None:
+    client = OllamaModelClient(
+        model="gemma3:1b",
+        host="http://ollama:11434",
+        timeout=1,
+        hint="AI is off. Start it with: docker compose --profile ai up -d",
+    )
+
+    def fail(**kwargs: Any) -> None:
+        raise ConnectionError("connection refused")
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError) as excinfo:
+        client.generate_json("private text", schema={"type": "object"})
+
+    message = str(excinfo.value)
+    assert "Could not reach Ollama at http://ollama:11434" in message
+    assert "docker compose --profile ai up -d" in message
+
+
+def test_ollama_client_ignores_the_hint_in_cloud_mode() -> None:
+    client = OllamaModelClient(
+        model="gemma4:31b-cloud",
+        host="https://ollama.com",
+        timeout=1,
+        cloud=True,
+        hint="AI is off. Start it with: docker compose --profile ai up -d",
+    )
+
+    def fail(**kwargs: Any) -> None:
+        raise ConnectionError("connection refused")
+
+    client._client = SimpleNamespace(chat=fail)  # type: ignore[assignment]
+
+    with pytest.raises(ModelError) as excinfo:
+        client.generate_json("private text", schema={"type": "object"})
+
+    message = str(excinfo.value)
+    assert "check OLLAMA_API_KEY" in message
+    assert "docker compose" not in message
+
+
+def test_from_settings_only_carries_the_hint_for_local_ollama() -> None:
+    local = OllamaModelClient.from_settings(
+        Settings(ollama_hint="Start the ai profile.")
+    )
+    cloud = OllamaModelClient.from_settings(
+        Settings(
+            ollama_cloud=True,
+            ollama_api_key="test-key",
+            ollama_hint="Start the ai profile.",
+        )
+    )
+
+    assert local.hint == "Start the ai profile."
+    assert cloud.hint == ""
+
+
 def test_ollama_client_reports_the_ollama_error_body() -> None:
     client = OllamaModelClient(model="gemma3:1b", host="http://test", timeout=1)
 

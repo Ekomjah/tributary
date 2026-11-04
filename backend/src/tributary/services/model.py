@@ -85,6 +85,7 @@ def _describe_failure(
     host: str,
     timeout: float,
     cloud: bool = False,
+    hint: str = "",
 ) -> str:
     """Name the real failure instead of always blaming availability."""
 
@@ -100,7 +101,10 @@ def _describe_failure(
                 f"Could not reach {service} at {host}; "
                 "check OLLAMA_API_KEY and network access."
             )
-        return f"Could not reach Ollama at {host}. Is it running?"
+        message = f"Could not reach Ollama at {host}. Is it running?"
+        # Local deployments may supply the fix (for example the compose profile
+        # that starts Ollama); never append it to a cloud failure.
+        return f"{message} {hint.strip()}" if hint.strip() else message
     if isinstance(exc, httpx.TimeoutException):
         return f"{service} at {host} did not finish within {timeout:g}s."
     return f"{service} call failed: {type(exc).__name__}: {exc}"
@@ -157,6 +161,7 @@ class OllamaModelClient:
     timeout: float = 120.0
     api_key: str | None = field(default=None, repr=False)
     cloud: bool = False
+    hint: str = ""
     _client: ollama.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -179,6 +184,7 @@ class OllamaModelClient:
             timeout=settings.ollama_timeout,
             api_key=settings.ollama_api_key if settings.ollama_cloud else None,
             cloud=settings.ollama_cloud,
+            hint="" if settings.ollama_cloud else settings.ollama_hint,
         )
 
     def generate_json(
@@ -224,6 +230,7 @@ class OllamaModelClient:
                     host=self.host,
                     timeout=self.timeout,
                     cloud=self.cloud,
+                    hint=self.hint,
                 )
                 logger.warning("Ollama call failed: %s", message)
                 raise ModelError(message) from exc
@@ -304,7 +311,10 @@ def check_ollama(settings: Settings) -> tuple[bool, str, list[str]]:
         response = client.list()
     except Exception as exc:
         target = f"Ollama Cloud at {host}" if settings.ollama_cloud else host
-        return False, f"cannot reach {target} ({type(exc).__name__})", []
+        detail = f"cannot reach {target} ({type(exc).__name__})"
+        if not settings.ollama_cloud and settings.ollama_hint.strip():
+            detail = f"{detail}. {settings.ollama_hint.strip()}"
+        return False, detail, []
 
     names = sorted(
         {
