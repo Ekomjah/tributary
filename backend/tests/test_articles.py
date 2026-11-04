@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import httpx
@@ -1030,4 +1031,327 @@ def test_reddit_link_post_without_body_stays_empty(
     # The external link resolves to the challenge page in this mock, so there
     # is no body to keep and the reader must not show Reddit boilerplate.
     assert result.status == "blocked"
+    assert item.content_full is None
+
+
+def long_paragraphs(label: str = "Body", count: int = 3) -> list[str]:
+    return [
+        f"{label} paragraph {index} explains the topic with enough detail to read like real prose, "
+        "including context, a caveat and a concrete example. " * 4
+        for index in range(count)
+    ]
+
+
+def test_div_based_page_keeps_every_article_paragraph(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="Short feed summary.")
+    paragraphs = long_paragraphs("Div")
+    page = (
+        "<html><body><nav>Menu</nav><main><div class='article-body'>"
+        + "".join(f"<div>{paragraph}</div>" for paragraph in paragraphs)
+        + "</div></main><footer>Footer</footer></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    for index in range(3):
+        assert f"Div paragraph {index}" in (item.content_full or "")
+    assert "Menu" not in (item.content_full or "")
+    assert "Footer" not in (item.content_full or "")
+
+
+def test_github_style_readme_is_kept_without_the_sidebar(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="Short feed summary.", title="README")
+    readme = "".join(
+        f"<p>Step {index} installs the package and explains the option with enough words.</p>"
+        for index in range(6)
+    )
+    page = (
+        "<html><body><nav>Menu</nav><div class='sidebar'>Sidebar links</div>"
+        f"<article id='readme' class='markdown-body'><h1>README</h1>{readme}"
+        "<pre>pip install tributary</pre></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert "Step 5" in (item.content_full or "")
+    assert "pip install tributary" in (item.content_full or "")
+    assert "Sidebar" not in (item.content_full or "")
+    assert "Menu" not in (item.content_full or "")
+
+
+def test_next_data_state_is_read_when_visible_html_is_empty(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    content = "".join(
+        f"<p>State paragraph {index} carries the article body out of the bootstrap payload "
+        "with enough detail to be worth reading. </p>"
+        for index in range(5)
+    )
+    payload = json.dumps({"props": {"pageProps": {"article": {"content": content}}}})
+    page = (
+        "<html><body><div id='root'></div>"
+        f'<script id="__NEXT_DATA__" type="application/json">{payload}</script>'
+        "</body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "embedded_state"
+    for index in range(5):
+        assert f"State paragraph {index}" in (item.content_full or "")
+    assert "<p>" in (item.content_html or "")
+
+
+def test_short_article_with_og_type_is_kept(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    note = "A short but genuine note about a fix that shipped today, with context. " * 4
+    page = (
+        "<html><head><meta property='og:type' content='article'></head>"
+        f"<body><article><p>{note}</p></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert "genuine note" in (item.content_full or "")
+
+
+def test_short_page_without_article_signals_stays_empty(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    note = "A short note that never declares itself an article. " * 6
+    page = f"<html><body><div>{note}</div></body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "empty"
+    assert item.content_full is None
+
+
+def test_json_ld_graph_body_is_used(db_session: Session, settings: Settings) -> None:
+    item = make_item(db_session, content="")
+    body = "A complete article body from a graph node. " * 20
+    payload = json.dumps(
+        {
+            "@context": "https://schema.org",
+            "@graph": [{"@type": "NewsArticle", "articleBody": body}],
+        }
+    )
+    page = (
+        "<html><head>"
+        f'<script type="application/ld+json">{payload}</script>'
+        "</head><body><p>Too short.</p></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert result.reason == "structured_data"
+    assert "graph node" in (item.content_full or "")
+
+
+def test_table_cells_survive_in_plain_text(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    paragraphs = long_paragraphs("Table")
+    page = (
+        "<html><body><article>"
+        + "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+        + "<table><tr><th>Name</th><th>Value</th></tr>"
+        "<tr><td>Alpha</td><td>Cell</td></tr></table>"
+        "</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert "Cell" in (item.content_full or "")
+    assert "<table>" in (item.content_html or "")
+
+
+def test_paywall_phrase_inside_a_script_does_not_block_a_short_article(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    note = "A short but genuine note about a fix that shipped today, with context. " * 4
+    page = (
+        "<html><head><meta property='og:type' content='article'></head><body>"
+        "<script>var copy = 'subscribe to continue reading';</script>"
+        f"<article><p>{note}</p></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "ok"
+    assert "genuine note" in (item.content_full or "")
+
+
+def test_container_candidate_skips_an_empty_article_wrapper() -> None:
+    paragraphs = long_paragraphs("Main", count=3)
+    page = (
+        "<html><body><article><h1>Title</h1></article><main>"
+        + "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+        + "</main></body></html>"
+    )
+
+    candidate = articles._candidate_containers(page.encode(), "https://example.com/post")
+
+    assert candidate is not None
+    assert "Main paragraph 0" in candidate.text
+    assert "Main paragraph 2" in candidate.text
+
+
+def test_paywall_page_is_blocked_before_using_its_meta_description(
+    db_session: Session,
+    settings: Settings,
+) -> None:
+    item = make_item(db_session, content="")
+    description = "A substantial summary published in the page metadata. " * 12
+    page = (
+        "<html><head>"
+        f'<meta name="description" content="{description}">'
+        "</head><body><article><h1>Members only</h1>"
+        "<p>Subscribe to continue reading this story.</p>"
+        "</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=page.encode(),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = articles.fetch_article(
+            db_session,
+            item,
+            settings=settings.model_copy(update={"article_delay_seconds": 0}),
+            client=client,
+        )
+
+    assert result.status == "blocked"
+    assert result.reason == "paywall"
     assert item.content_full is None
