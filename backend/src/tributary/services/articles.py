@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from html import escape as html_escape
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import feedparser
@@ -30,9 +31,11 @@ from .text import (
     is_promo_image,
     leading_image,
     normalize_text,
+    prose_chars,
     safe_image_url,
     sanitize_html,
     strip_leading_image,
+    strip_page_chrome,
     titles_match,
 )
 from .urls import UnsafeUrlError, validate_public_url
@@ -72,6 +75,82 @@ _METADATA_LABEL = re.compile(
     re.IGNORECASE,
 )
 
+# A candidate below this many characters is never worth showing. It is lower
+# than the configured article floor so short, genuinely real notes can still be
+# accepted when the page declares itself an article.
+_CANDIDATE_FLOOR = 80
+
+# Containers ordered from most specific to broadest. The first selector that
+# yields real prose wins, but an empty or near-empty match never stops the
+# search, because many templates have an <article> wrapper around the hero only.
+_CONTAINER_SELECTORS = (
+    "[itemprop=articleBody]",
+    "[itemprop=text]",
+    "[data-testid=readme]",
+    "#readme",
+    ".markdown-body",
+    ".md-content",
+    ".theme-doc-markdown",
+    ".doc-content",
+    "[class*=article-body]",
+    "[class*=article__body]",
+    "[class*=article-content]",
+    "[class*=entry-content]",
+    "[class*=post-content]",
+    "[class*=post-body]",
+    "[class*=story-body]",
+    "[class*=story-content]",
+    "[class*=prose]",
+    "article",
+    "main",
+    "[role=main]",
+)
+
+_ARTICLE_TYPES = frozenset(
+    {
+        "AnalysisNewsArticle",
+        "Article",
+        "BackgroundNewsArticle",
+        "BlogPosting",
+        "NewsArticle",
+        "OpinionNewsArticle",
+        "Report",
+        "ReviewNewsArticle",
+        "ScholarlyArticle",
+        "TechArticle",
+    }
+)
+
+_STATE_SCRIPT_IDS = frozenset(
+    {
+        "__apollo_state__",
+        "__initial_state__",
+        "__next_data__",
+        "__nuxt_data__",
+        "__remixcontext",
+    }
+)
+_STATE_KEY = re.compile(
+    r"(?:^|_)(?:article|body|content|description|html|markdown|text)$",
+    re.IGNORECASE,
+)
+_STATE_SKIP_KEY = re.compile(
+    r"(?:author|css|date|hash|icon|id|image|key|lang|locale|name|path|script|"
+    r"slug|title|token|type|url)$",
+    re.IGNORECASE,
+)
+_STATE_MAX_DEPTH = 12
+
+# Short lines that only exist to sell, navigate or share. Long paragraphs are
+# never treated as boilerplate just because they contain one of these words.
+_BOILERPLATE_LINE = re.compile(
+    r"^(?:about(?: us)?|advertisement|all rights reserved|contact(?: us)?|"
+    r"cookie(?:s| policy)?|home|log in|menu|privacy(?: policy)?|read more|"
+    r"related(?: articles| posts| stories)?|share(?: this)?|sign (?:in|up)|"
+    r"sponsored|subscribe(?: to .*)?|terms(?: of (?:service|use))?)$",
+    re.IGNORECASE,
+)
+
 
 @dataclass(slots=True)
 class ArticleResult:
@@ -98,6 +177,25 @@ class PageMetadata:
     author: str | None = None
     cover_image: str | None = None
     cover_image_alt: str | None = None
+
+
+@dataclass(slots=True)
+class _Candidate:
+    """One possible representation of a page's article body."""
+
+    text: str
+    html: str | None
+    reason: str
+    prior: float = 1.0
+
+
+@dataclass(slots=True)
+class _ScoredCandidate:
+    """A candidate plus the quality signals used to rank it."""
+
+    candidate: _Candidate
+    chars: int
+    score: float
 
 
 class ArticleFetchError(RuntimeError):
@@ -324,7 +422,9 @@ def _apply_frontmatter(item: Item, result: ArticleResult) -> bool:
             if stripped != item.content_html:
                 item.content_html = stripped
                 changed = True
-            if caption and not item.cover_caption:
+            if caption:
+                # The stored fragment's caption belongs to the same image and
+                # is more specific than a caption re-read from the page.
                 item.cover_caption = caption
                 changed = True
         elif result.html:
@@ -436,25 +536,7 @@ def _fetch_page(
             )
 
         try:
-            extracted = trafilatura.extract(
-                body,
-                url=final_url,
-                include_links=False,
-                include_comments=False,
-                include_tables=False,
-                favor_precision=True,
-            )
-            extracted_html = trafilatura.extract(
-                body,
-                url=final_url,
-                output_format="html",
-                include_links=True,
-                include_comments=False,
-                include_tables=True,
-                include_images=True,
-                include_formatting=True,
-                favor_precision=True,
-            )
+            candidates = _collect_candidates(body, final_url)
         except Exception as exc:  # pragma: no cover - malformed page
             _capture_error(exc, host=host, status="error")
             return ArticleResult(
@@ -466,12 +548,18 @@ def _fetch_page(
             )
 
         metadata = _extract_page_metadata(body, final_url)
-        text = _strip_leading_title((extracted or "").strip(), title)
-        if len(text) < settings.article_min_chars:
+        scored = _score_candidates(candidates)
+        content = [item for item in scored if item.candidate.reason != "meta_description"]
+        best_chars = max((item.chars for item in content), default=0)
+        chosen = None
+        if best_chars >= settings.article_min_chars:
+            chosen = _choose_candidate(content, settings=settings)
+
+        if chosen is None:
             classification = classify_page(
                 body,
                 status_code=response.status_code,
-                extracted_chars=len(text),
+                extracted_chars=best_chars,
                 min_chars=settings.article_min_chars,
             )
             if classification.kind is PageKind.JS_CHALLENGE:
@@ -505,43 +593,33 @@ def _fetch_page(
                     reason="paywall",
                 )
 
-            structured = _structured_data(body, final_url)
-            if structured is not None and len(structured[0]) >= settings.article_min_chars:
-                fallback_text, fallback_html = structured
-                cover_image, cover_image_alt, cover_caption = _choose_cover(
-                    fallback_html,
-                    metadata,
-                )
+            if _page_article_signals(body):
+                chosen = _choose_short_candidate(content, settings=settings)
+            if chosen is None:
+                descriptions = [
+                    item for item in scored if item.candidate.reason == "meta_description"
+                ]
+                chosen = _choose_candidate(descriptions, settings=settings)
+            if chosen is None:
                 return ArticleResult(
-                    status="ok",
-                    text=fallback_text,
-                    html=fallback_html,
-                    author=metadata.author,
-                    cover_image=cover_image,
-                    cover_image_alt=cover_image_alt,
-                    cover_caption=cover_caption,
-                    fetched=True,
+                    status="empty",
+                    text=None,
                     truncated=truncated,
                     bytes_read=len(body),
-                    reason="structured_data",
+                    reason="too_short",
                 )
 
-            description = _meta_description(body, final_url)
-            if description is not None and len(description) >= settings.article_min_chars:
-                cover_image, cover_image_alt, cover_caption = _choose_cover(None, metadata)
-                return ArticleResult(
-                    status="ok",
-                    text=description,
-                    author=metadata.author,
-                    cover_image=cover_image,
-                    cover_image_alt=cover_image_alt,
-                    cover_caption=cover_caption,
-                    fetched=True,
-                    truncated=truncated,
-                    bytes_read=len(body),
-                    reason="meta_description",
-                )
-
+        html = None
+        if chosen.candidate.html:
+            html = _strip_leading_heading(
+                sanitize_html(chosen.candidate.html, base_url=final_url),
+                title,
+            )
+            html = _strip_metadata_lists(html)
+        text = normalize_text(
+            html_to_text(html) if html else _strip_leading_title(chosen.candidate.text, title)
+        ).strip()
+        if not text:
             return ArticleResult(
                 status="empty",
                 text=None,
@@ -550,11 +628,6 @@ def _fetch_page(
                 reason="too_short",
             )
 
-        html = _strip_leading_heading(
-            sanitize_html(extracted_html or "", base_url=final_url),
-            title,
-        )
-        html = _strip_metadata_lists(html)
         cover_image, cover_image_alt, cover_caption = _choose_cover(html, metadata)
         if cover_image:
             html, stripped_caption = strip_leading_image(html, cover_image)
@@ -571,11 +644,353 @@ def _fetch_page(
             fetched=True,
             truncated=truncated,
             bytes_read=len(body),
-            reason="extracted",
+            reason=chosen.candidate.reason,
         )
     finally:
         if owns_client:
             active_client.close()
+
+
+def _collect_candidates(body: bytes, url: str) -> list[_Candidate]:
+    """Run every extraction strategy and return their distinct proposals.
+
+    The trafilatura calls stay first and unchanged in spirit: precision is the
+    incumbent, recall is a second opinion. Structured data, embedded
+    application state, semantic containers and a chrome-stripped page rescue
+    cover the shapes trafilatura cannot see. One failing producer never sinks
+    the others.
+    """
+
+    candidates: list[_Candidate] = []
+    for recall in (False, True):
+        try:
+            candidate = _candidate_trafilatura(body, url, recall=recall)
+        except Exception:  # pragma: no cover - malformed page
+            logger.debug("trafilatura candidate failed", exc_info=True)
+            continue
+        if candidate is not None:
+            candidates.append(candidate)
+
+    producers = (
+        _candidate_structured,
+        _candidate_embedded_state,
+        _candidate_containers,
+        _candidate_page_rescue,
+        _candidate_meta,
+    )
+    for producer in producers:
+        try:
+            candidate = producer(body, url)
+        except Exception:  # pragma: no cover - one producer must not sink the rest
+            logger.debug("Article candidate %s failed", producer.__name__, exc_info=True)
+            continue
+        if candidate is not None:
+            candidates.append(candidate)
+
+    return _dedupe_candidates(candidates)
+
+
+def _dedupe_candidates(candidates: list[_Candidate]) -> list[_Candidate]:
+    """Keep the strongest candidate for each distinct body text."""
+
+    unique: dict[str, _Candidate] = {}
+    for candidate in candidates:
+        key = " ".join(candidate.text.split())
+        if not key:
+            continue
+        current = unique.get(key)
+        if current is None or candidate.prior > current.prior:
+            unique[key] = candidate
+    return list(unique.values())
+
+
+def _candidate_trafilatura(
+    body: bytes,
+    url: str,
+    *,
+    recall: bool,
+) -> _Candidate | None:
+    """Return trafilatura's HTML output and derive plain text from it.
+
+    Deriving text from the same markup the reader will render keeps the two
+    representations aligned, so a table or code block cannot survive in one and
+    vanish from the other.
+    """
+
+    html = trafilatura.extract(
+        body,
+        url=url,
+        output_format="html",
+        include_links=True,
+        include_comments=False,
+        include_tables=True,
+        include_images=True,
+        include_formatting=True,
+        favor_precision=not recall,
+        favor_recall=recall,
+    )
+    reason = "extracted_recall" if recall else "extracted"
+    prior = 0.97 if recall else 1.0
+    if html:
+        text = html_to_text(html)
+        if text.strip():
+            return _Candidate(text=text, html=html, reason=reason, prior=prior)
+
+    text = trafilatura.extract(
+        body,
+        url=url,
+        include_links=False,
+        include_comments=False,
+        include_tables=True,
+        favor_precision=not recall,
+        favor_recall=recall,
+    )
+    if not text or not text.strip():
+        return None
+    return _Candidate(text=text, html=None, reason=reason, prior=prior)
+
+
+def _candidate_structured(body: bytes, url: str) -> _Candidate | None:
+    structured = _structured_data(body, url)
+    if structured is None:
+        return None
+    text, html = structured
+    return _Candidate(text=text, html=html, reason="structured_data", prior=1.02)
+
+
+def _candidate_meta(body: bytes, url: str) -> _Candidate | None:
+    description = _meta_description(body, url)
+    if not description:
+        return None
+    return _Candidate(text=description, html=None, reason="meta_description", prior=0.65)
+
+
+def _candidate_containers(body: bytes, url: str) -> _Candidate | None:
+    """Harvest the first semantic container that actually yields prose."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    best_html: str | None = None
+    best_chars = 0
+    for selector in _CONTAINER_SELECTORS:
+        for node in soup.select(selector):
+            fragment = BeautifulSoup(str(node), "html.parser")
+            strip_page_chrome(fragment, comments=False)
+            chars = prose_chars(fragment)
+            if chars > best_chars:
+                best_chars = chars
+                best_html = str(fragment)
+        if best_chars >= _CANDIDATE_FLOOR:
+            break
+
+    if best_html is None:
+        return None
+    text = html_to_text(best_html)
+    if not text.strip():
+        return None
+    return _Candidate(text=text, html=best_html, reason="container", prior=0.95)
+
+
+def _candidate_page_rescue(body: bytes, url: str) -> _Candidate | None:
+    """Read the whole page after removing its chrome, as a last resort."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    strip_page_chrome(soup, comments=True)
+    html = str(soup)
+    text = html_to_text(html)
+    if len(text.strip()) < _CANDIDATE_FLOOR:
+        return None
+    return _Candidate(text=text, html=html, reason="page_rescue", prior=0.92)
+
+
+def _candidate_embedded_state(body: bytes, url: str) -> _Candidate | None:
+    """Read article text stored in a framework's JSON bootstrap state."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    best = ""
+    for script in soup.find_all("script"):
+        content_type = str(script.get("type") or "").lower()
+        script_id = str(script.get("id") or "").lower()
+        if "ld+json" in content_type:
+            continue
+        if "json" not in content_type and script_id not in _STATE_SCRIPT_IDS:
+            continue
+        raw = script.string if script.string is not None else script.get_text()
+        if not raw or not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        for value in _state_strings(payload):
+            if len(value) > len(best) and _looks_like_prose(value):
+                best = value
+
+    if not best:
+        return None
+
+    if "<" in best:
+        fragment = BeautifulSoup(best, "html.parser")
+        strip_page_chrome(fragment, comments=False)
+        html = str(fragment)
+        text = html_to_text(html)
+    else:
+        text = best.strip()
+        paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
+        html = "".join(f"<p>{html_escape(part)}</p>" for part in paragraphs)
+    if not text.strip():
+        return None
+    return _Candidate(text=text, html=html or None, reason="embedded_state", prior=0.93)
+
+
+def _state_strings(value: object, *, depth: int = 0):
+    """Yield long strings held under body-like keys in a JSON state tree."""
+
+    if depth > _STATE_MAX_DEPTH:
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key)).lower()
+            if isinstance(child, str):
+                if (
+                    len(child) >= 200
+                    and _STATE_KEY.search(key_text)
+                    and not _STATE_SKIP_KEY.search(key_text)
+                ):
+                    yield child
+            elif isinstance(child, (dict, list)):
+                yield from _state_strings(child, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                yield from _state_strings(child, depth=depth + 1)
+
+
+def _looks_like_prose(value: str) -> bool:
+    text = value.strip()
+    if len(text) < 200:
+        return False
+    if text.startswith(("{", "[", "data:image")):
+        return False
+    if "<p" in text or "<br" in text or "</" in text or "\n\n" in text:
+        return True
+    words = text.split()
+    if len(words) < 40:
+        return False
+    spaces = sum(1 for char in text if char.isspace())
+    return spaces / len(text) >= 0.08
+
+
+def _page_article_signals(body: bytes) -> bool:
+    """Return whether the page declares itself to be an article."""
+
+    soup = BeautifulSoup(body, "html.parser")
+    for attrs in ({"property": "og:type"}, {"name": "og:type"}):
+        tag = soup.find("meta", attrs=attrs)
+        if tag is not None and "article" in str(tag.get("content") or "").lower():
+            return True
+    if soup.find("meta", attrs={"property": "article:published_time"}) is not None:
+        return True
+
+    for script in soup.find_all("script"):
+        if "ld+json" not in str(script.get("type") or "").lower():
+            continue
+        raw = script.string if script.string is not None else script.get_text()
+        if not raw or not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        for node in _json_nodes(payload):
+            value = node.get("@type")
+            types = value if isinstance(value, list) else [value]
+            if any(str(item) in _ARTICLE_TYPES for item in types):
+                return True
+
+    article = soup.find("article")
+    return (
+        article is not None
+        and len(" ".join(article.get_text(" ", strip=True).split())) >= _CANDIDATE_FLOOR
+    )
+
+
+def _score_candidate(candidate: _Candidate) -> _ScoredCandidate | None:
+    """Score a candidate by volume, link density and repeated chrome."""
+
+    text = normalize_text(candidate.text).strip()
+    if not text:
+        return None
+
+    link_density = 0.0
+    if candidate.html:
+        soup = BeautifulSoup(candidate.html, "html.parser")
+        total = len(" ".join(soup.get_text(" ", strip=True).split()))
+        linked = len(
+            " ".join(
+                " ".join(link.get_text(" ", strip=True).split()) for link in soup.find_all("a")
+            )
+        )
+        link_density = linked / total if total else 0.0
+
+    lines = [" ".join(line.split()) for line in text.split("\n") if line.strip()]
+    duplicate_ratio = 0.0
+    boilerplate_ratio = 0.0
+    if lines:
+        duplicate_ratio = 1 - (len(set(lines)) / len(lines))
+        boilerplate_ratio = sum(
+            1 for line in lines if len(line) <= 80 and _BOILERPLATE_LINE.fullmatch(line)
+        ) / len(lines)
+
+    score = len(text) * candidate.prior
+    if link_density > 0.65:
+        # A block that is mostly anchor text is navigation or a link list, not
+        # an article body.
+        return None
+    if link_density > 0.4:
+        score *= 0.6
+    score *= 1 - min(duplicate_ratio, 0.6)
+    score *= 1 - min(boilerplate_ratio, 0.4)
+    return _ScoredCandidate(candidate=candidate, chars=len(text), score=score)
+
+
+def _score_candidates(candidates: list[_Candidate]) -> list[_ScoredCandidate]:
+    """Score every candidate and drop the ones too small to be content."""
+
+    return [
+        item
+        for item in (_score_candidate(candidate) for candidate in candidates)
+        if item is not None and item.chars >= _CANDIDATE_FLOOR
+    ]
+
+
+def _choose_candidate(
+    scored: list[_ScoredCandidate],
+    *,
+    settings: Settings,
+) -> _ScoredCandidate | None:
+    """Pick the best candidate that clears the normal article floor."""
+
+    passing = [item for item in scored if item.chars >= settings.article_min_chars]
+    if not passing:
+        return None
+    return max(passing, key=lambda item: item.score)
+
+
+def _choose_short_candidate(
+    scored: list[_ScoredCandidate],
+    *,
+    settings: Settings,
+) -> _ScoredCandidate | None:
+    """Pick a short candidate for a page that explicitly declares an article."""
+
+    floor = max(
+        _CANDIDATE_FLOOR,
+        min(settings.article_short_article_floor, settings.article_min_chars),
+    )
+    short = [item for item in scored if item.chars >= floor]
+    if not short:
+        return None
+    return max(short, key=lambda item: item.score)
 
 
 def _is_pdf(response: httpx.Response, final_url: str) -> bool:
@@ -627,9 +1042,10 @@ def _json_nodes(value: object):
 
 
 def _structured_data(body: bytes, url: str) -> tuple[str, str | None] | None:
-    """Return an article body published in JSON-LD, when one is present."""
+    """Return the longest article body published in JSON-LD, when one is present."""
 
     soup = BeautifulSoup(body, "html.parser")
+    best: tuple[str, str | None] | None = None
     for script in soup.find_all("script"):
         content_type = str(script.get("type") or "").lower()
         if "ld+json" not in content_type:
@@ -643,18 +1059,19 @@ def _structured_data(body: bytes, url: str) -> tuple[str, str | None] | None:
             continue
 
         for node in _json_nodes(payload):
-            candidate = node.get("articleBody")
-            if not isinstance(candidate, str) or not candidate.strip():
-                continue
-            if "<" in candidate:
-                text = html_to_text(candidate).strip()
-                html = sanitize_html(candidate, base_url=url)
-            else:
-                text = normalize_text(candidate).strip()
-                html = None
-            if text:
-                return text, html
-    return None
+            for field in ("articleBody", "text"):
+                candidate = node.get(field)
+                if not isinstance(candidate, str) or not candidate.strip():
+                    continue
+                if "<" in candidate:
+                    text = html_to_text(candidate).strip()
+                    html = sanitize_html(candidate, base_url=url)
+                else:
+                    text = normalize_text(candidate).strip()
+                    html = None
+                if text and (best is None or len(text) > len(best[0])):
+                    best = (text, html)
+    return best
 
 
 def _meta_description(body: bytes, url: str) -> str | None:

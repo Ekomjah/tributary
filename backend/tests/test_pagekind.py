@@ -78,3 +78,29 @@ def test_plain_forbidden_page_is_not_a_challenge() -> None:
     result = classify_page(body, status_code=403, extracted_chars=0)
 
     assert result.kind is PageKind.ARTICLE
+
+
+def test_login_phrase_inside_a_script_is_not_visible() -> None:
+    body = (
+        "<html><body>"
+        "<script>var copy = 'Sign in to continue';</script>"
+        "<article><p>A short but real article body.</p></article>"
+        "</body></html>"
+    )
+
+    result = classify_page(body, extracted_chars=10, min_chars=500)
+
+    assert result.kind is PageKind.ARTICLE
+
+
+def test_paywall_phrase_inside_a_script_is_not_visible() -> None:
+    body = (
+        "<html><body>"
+        "<script>var copy = 'subscribe to continue reading';</script>"
+        "<article><p>A short but real article body.</p></article>"
+        "</body></html>"
+    )
+
+    result = classify_page(body, extracted_chars=10, min_chars=500)
+
+    assert result.kind is PageKind.ARTICLE

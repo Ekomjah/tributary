@@ -6,7 +6,7 @@ import unicodedata
 from urllib.parse import urljoin, urlsplit
 
 import nh3
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 __all__ = [
     "clean_byline",
@@ -16,10 +16,13 @@ __all__ = [
     "is_promo_image",
     "leading_image",
     "normalize_text",
+    "prose_chars",
     "readable_title",
     "safe_image_url",
     "sanitize_html",
+    "strip_invisible",
     "strip_leading_image",
+    "strip_page_chrome",
     "titles_match",
     "unescape_all",
 ]
@@ -66,6 +69,31 @@ _BLOCK_TAGS = (
     "ul",
 )
 _DROP_TAGS = ("script", "style", "noscript", "template", "svg", "iframe", "object")
+
+# Page chrome that never belongs to the article body. Removing it before
+# scoring keeps a rescue candidate from winning on navigation text alone.
+_CHROME_TAGS = ("aside", "dialog", "footer", "form", "head", "header", "nav")
+_CHROME_MARKER = re.compile(
+    r"(?:^|[-_ ])(?:ad|ads|advert|advertisement|banner|breadcrumb|consent|cookie|"
+    r"footer|header|login|menu|modal|nav|newsletter|popup|promo|related|share|"
+    r"sidebar|signup|social|sponsor|subscribe|toolbar)(?:[-_ ]|$)",
+    re.IGNORECASE,
+)
+_COMMENT_MARKER = re.compile(r"(?:^|[-_ ])comments?(?:[-_ ]|$)", re.IGNORECASE)
+_PROSE_BLOCK_TAGS = (
+    "blockquote",
+    "dd",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "p",
+    "pre",
+    "td",
+    "th",
+)
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _INLINE_SPACE = re.compile(r"[ \t\f\v]+")
@@ -701,3 +729,79 @@ def html_to_text(value: str) -> str:
             cleaned.append("")
 
     return unescape_all(_BLANK_LINES.sub("\n\n", "\n".join(cleaned)).strip())
+
+
+def strip_invisible(soup: BeautifulSoup) -> None:
+    """Remove scripts, styles, templates and comments from a parsed page.
+
+    Challenge markers are still read from the raw source; this helper exists so
+    login and paywall phrases are matched against what a reader can actually
+    see, not against strings inside JavaScript.
+    """
+
+    for tag in soup(_DROP_TAGS):
+        tag.decompose()
+    for comment in soup.find_all(string=lambda node: isinstance(node, Comment)):
+        comment.extract()
+
+
+def strip_page_chrome(soup: BeautifulSoup, *, comments: bool = True) -> None:
+    """Remove navigation, footers, forms and promo widgets from a page fragment.
+
+    ``comments`` controls whether elements whose class or id looks like a
+    comment thread are dropped. Article rescues want them gone; forum and
+    documentation containers may legitimately carry replies as content.
+    """
+
+    for tag in soup(_DROP_TAGS):
+        tag.decompose()
+
+    for tag in soup.find_all(_CHROME_TAGS):
+        if tag.find_parent("pre") is None:
+            tag.decompose()
+
+    for tag in soup.find_all(True):
+        if tag.attrs is None or tag.parent is None:
+            continue
+        if tag.name in {"article", "body", "html", "main"}:
+            continue
+        if tag.find_parent("pre") is not None:
+            continue
+        classes = tag.get("class") or []
+        marker = " ".join(
+            [
+                " ".join(classes) if isinstance(classes, list) else str(classes),
+                str(tag.get("id") or ""),
+                str(tag.get("role") or ""),
+                str(tag.get("aria-label") or ""),
+            ]
+        ).strip()
+        if not marker:
+            continue
+        if _CHROME_MARKER.search(marker) or (comments and _COMMENT_MARKER.search(marker)):
+            tag.decompose()
+
+
+def prose_chars(value: str | BeautifulSoup) -> int:
+    """Count characters that sit in paragraph-like blocks.
+
+    A container that only holds a link list or a short teaser scores near zero,
+    while a documentation page keeps credit for long list items, table cells
+    and fenced code blocks.
+    """
+
+    soup = BeautifulSoup(value, "html.parser") if isinstance(value, str) else value
+    total = 0
+    blocks = 0
+    for block in soup.find_all(_PROSE_BLOCK_TAGS):
+        text = " ".join(block.get_text(" ", strip=True).split())
+        if not text:
+            continue
+        blocks += 1
+        if len(text) >= 40:
+            total += len(text)
+        elif block.name in {"li", "pre", "td", "th"} and len(text) >= 20:
+            total += len(text)
+    if blocks == 0:
+        total = len(" ".join(soup.get_text(" ", strip=True).split()))
+    return total
