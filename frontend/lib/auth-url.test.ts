@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAuthLoginUrl } from "./auth-url";
+import { buildAuthLoginUrl, buildAuthLogoutUrl } from "./auth-url";
 
 const ORIGIN = "https://tributaries.tech";
 
 describe("buildAuthLoginUrl", () => {
-  it("resumes at the reader by default", () => {
+  it("resumes at the reader and forces fresh credentials", () => {
     expect(buildAuthLoginUrl(ORIGIN)).toBe(
-      `${ORIGIN}/auth/login?returnTo=%2Ffeeds`,
+      `${ORIGIN}/auth/login?returnTo=%2Ffeeds&prompt=login`,
     );
   });
 
-  it("asks Auth0 for the sign-up screen", () => {
+  it("asks Auth0 for the sign-up screen and forces fresh credentials", () => {
     expect(buildAuthLoginUrl(ORIGIN, { screenHint: "signup" })).toBe(
-      `${ORIGIN}/auth/login?returnTo=%2Ffeeds&screen_hint=signup`,
+      `${ORIGIN}/auth/login?returnTo=%2Ffeeds&screen_hint=signup&prompt=login`,
     );
   });
 
@@ -24,7 +24,16 @@ describe("buildAuthLoginUrl", () => {
         screenHint: "signup",
       }),
     ).toBe(
-      "http://localhost:3000/auth/login?returnTo=%2Fpipes%3Ftab%3D1&screen_hint=signup",
+      "http://localhost:3000/auth/login?returnTo=%2Fpipes%3Ftab%3D1&screen_hint=signup&prompt=login",
     );
+  });
+});
+
+describe("buildAuthLogoutUrl", () => {
+  it("uses the proxy route without a return path", () => {
+    const url = buildAuthLogoutUrl(ORIGIN);
+
+    expect(url).toBe(`${ORIGIN}/auth/logout`);
+    expect(url).not.toContain("returnTo");
   });
 });

@@ -338,15 +338,21 @@ start in cloud mode without PostgreSQL, Auth0 settings and `CORS_ORIGINS`.
 Create a **Regular Web Application** in Auth0, not a Single Page Application.
 Set its callback URL to `https://<reader-origin>/auth/callback` and its logout
 URL to `https://<reader-origin>/`. Use `client_secret_post` as the token
-endpoint authentication method. For local development the origin is usually
-`http://localhost:3000`, so the callback is
+endpoint authentication method. The host must match exactly, including `www`:
+the SDK sends `APP_BASE_URL` as `post_logout_redirect_uri`, and Auth0 rejects a
+logout redirect on a host it does not know. Keep the logout URL on the bare
+origin; Auth0 does not accept arbitrary paths there. For local development the
+origin is usually `http://localhost:3000`, so the callback is
 `http://localhost:3000/auth/callback` and the logout URL is
 `http://localhost:3000/`.
 
 The reader uses the official `@auth0/nextjs-auth0` SDK. It mounts the
 `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/profile` and
 `/auth/access-token` routes through `frontend/proxy.ts`; the browser never sees
-the client secret or the encrypted session cookie. The SDK keeps a rolling
+the client secret or the encrypted session cookie. Both **Sign in** and
+**Create account** send `prompt=login`, so an existing Auth0 session cannot
+silently re-authenticate the previous account; **Create account** also sends
+`screen_hint=signup`. The SDK keeps a rolling
 server-side session and rotates refresh tokens. The browser asks
 `/auth/access-token` for the short-lived token it sends to the API as a bearer
 token.
@@ -388,10 +394,13 @@ AUTH0_SECRET=your-session-secret
 NEXT_PUBLIC_API_BASE=https://your-api.example.com
 ```
 
-`APP_BASE_URL` must match the origin registered in Auth0. The client secret and
-`AUTH0_SECRET` are server-only; never prefix them with `NEXT_PUBLIC_` and never
-commit them. Changing the reader hostname means updating `APP_BASE_URL`, the
-Auth0 callback URL and the Auth0 logout URL together.
+`APP_BASE_URL` must match the origin registered in Auth0 exactly, including
+`www` versus the apex domain. The SDK uses it for both the callback URL and
+`post_logout_redirect_uri`, so a mismatch can make logout fail while the reader
+merely looks signed out. The client secret and `AUTH0_SECRET` are server-only;
+never prefix them with `NEXT_PUBLIC_` and never commit them. Changing the
+reader hostname means updating `APP_BASE_URL`, the Auth0 callback URL and the
+Auth0 logout URL together.
 
 ## Limitations
 

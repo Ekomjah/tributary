@@ -17,7 +17,11 @@ import {
   setApiUnauthorizedHandler,
 } from "./api-auth";
 import type { AuthMode, AuthRuntimeConfig } from "./auth-config";
-import { buildAuthLoginUrl, type AuthLoginOptions } from "./auth-url";
+import {
+  buildAuthLoginUrl,
+  buildAuthLogoutUrl,
+  type AuthLoginOptions,
+} from "./auth-url";
 import { resetItemMutations } from "./item-mutations";
 
 export type { AuthLoginOptions } from "./auth-url";
@@ -195,13 +199,10 @@ function CloudAuthSession({ children }: { children: ReactNode }) {
     setSessionExpired(false);
     resetItemMutations();
     queryClient.clear();
-    const returnTo =
-      typeof window === "undefined" ? "/" : `${window.location.origin}/`;
-    // Logout is a full document navigation through the Auth0 proxy.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.assign(
-      `${window.location.origin}/auth/logout?returnTo=${encodeURIComponent(returnTo)}`,
-    );
+    // Logout is a full document navigation through the Auth0 proxy. Omit
+    // returnTo so the SDK uses APP_BASE_URL as post_logout_redirect_uri,
+    // keeping it aligned with the origin registered in Auth0.
+    window.location.assign(buildAuthLogoutUrl(window.location.origin));
   }, [queryClient]);
 
   const value = useMemo<AuthSession>(
